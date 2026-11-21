@@ -162,3 +162,36 @@ def cycle_absolute(text: str, cursor: int) -> tuple[str, int]:
     new = f"{'$' if nxt[0] else ''}{col}{'$' if nxt[1] else ''}{row}"
     out = body[:m.start()] + new + body[m.end():]
     return out, m.start() + len(new)
+
+
+class NameBox(Input):
+    """The cell-address box. Type an address or name to jump there, or a new name to
+    define it for the current selection (like Excel's Name Box)."""
+
+    async def _on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            event.stop()
+            event.prevent_default()
+            self.app.namebox_done()
+            return
+        await super()._on_key(event)
+
+    _select_on_mouse_up = False
+
+    def on_focus(self, event: events.Focus) -> None:
+        if self.app.editing is not None and not self.app.commit_edit(move=None):
+            self.app.formula.focus()
+            return
+        self.select_all()
+        self._select_on_mouse_up = True
+
+    async def _on_mouse_up(self, event: events.MouseUp) -> None:
+        await super()._on_mouse_up(event)
+        if self._select_on_mouse_up:
+            # the click that focused the box selects everything, as in Excel
+            self._select_on_mouse_up = False
+            self.select_all()
+
+    def on_blur(self, event: events.Blur) -> None:
+        self._select_on_mouse_up = False
+        self.app.grid_changed()

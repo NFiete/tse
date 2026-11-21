@@ -196,3 +196,78 @@ async def test_formula_error_keeps_editing():
         assert app.editing is not None  # bad formula is not committed
         await pilot.press("escape")
         assert app.editing is None
+
+
+@pytest.mark.asyncio
+async def test_name_box_defines_and_jumps():
+    from termxl.model import names
+
+    app = TermXLApp()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _ready(app, pilot)
+        for v in ("1", "2", "3"):
+            await type_text(pilot, v)
+            await pilot.press("enter")
+        await pilot.press("ctrl+home", "shift+down", "shift+down")
+        await pilot.click("#namebox")
+        await type_text(pilot, "Stuff")
+        await pilot.press("enter")
+        assert [n.name for n in names.list_names(app.book)] == ["Stuff"]
+        assert app.query_one("#namebox").value == "Stuff"  # selection matches the name
+        await pilot.press("right")
+        await type_text(pilot, "=SUM(Stuff)")
+        await pilot.press("enter")
+        assert val(app, "B1") == 6
+        # jump back via the name box
+        await pilot.click("#namebox")
+        await type_text(pilot, "stuff")
+        await pilot.press("enter")
+        assert app.grid.selection.a1() == "A1:A3"
+        assert app.grid.has_focus
+
+
+@pytest.mark.asyncio
+async def test_name_manager_new_edit_delete():
+    from termxl.ui.dialogs import NameEditDialog, NameManagerDialog
+
+    app = TermXLApp()
+    async with app.run_test(size=(110, 32)) as pilot:
+        await _ready(app, pilot)
+        await type_text(pilot, "=A3*Rate")
+        await pilot.press("enter")
+        assert str(val(app, "A1")) == "#NAME?"
+        await pilot.press("ctrl+f3")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, NameManagerDialog)
+        await pilot.press("n")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, NameEditDialog)
+        await type_text(pilot, "Rate")
+        await pilot.press("tab")
+        await pilot.press("ctrl+a", "ctrl+k")  # clear "Refers to"
+        await type_text(pilot, "=0.25")
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, NameManagerDialog)
+        assert val(app, "A1") == 0
+        app.book.set_input(app.grid.sheet, 3, 1, "8")
+        assert val(app, "A1") == 2
+        # edit: rename Rate -> TaxRate, formulas follow
+        await pilot.press("e")
+        await pilot.pause(0.1)
+        await pilot.press("shift+tab")
+        await pilot.press("ctrl+a", "ctrl+k")
+        await type_text(pilot, "TaxRate")
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert app.grid.sheet.input_text(1, 1) == "=A3*TaxRate"
+        # delete -> #NAME?
+        await pilot.press("d")
+        await pilot.pause(0.1)
+        await pilot.press("d")  # "Delete" in the confirmation
+        await pilot.pause(0.1)
+        assert str(val(app, "A1")) == "#NAME?"
+        await pilot.press("escape")
+        await pilot.pause(0.05)
+        await pilot.press("ctrl+z")
+        assert val(app, "A1") == 2

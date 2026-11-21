@@ -17,12 +17,12 @@ from ..formula.errors import ExcelError
 from ..formula.parser import REFT, FormulaSyntaxError, Unsupported, tokenize
 from ..formula.registry import wildcard_regex
 from ..io import xlsx
-from ..model import structure
+from ..model import names, structure
 from ..model.refs import MAX_COL, MAX_ROW, Rect, addr, col_letter, quote_sheet
-from .dialogs import ChoiceDialog, FindDialog, HelpScreen, InputDialog
+from .dialogs import ChoiceDialog, FindDialog, HelpScreen, InputDialog, NameEditDialog, NameManagerDialog
 from .grid import Grid
 from .theme import DARK, LIGHT
-from .widgets import FormulaHighlighter, FormulaInput, SheetTabs, StatusBar, cycle_absolute
+from .widgets import FormulaHighlighter, FormulaInput, NameBox, SheetTabs, StatusBar, cycle_absolute
 
 _ARROWS = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
 _POINTABLE_BEFORE = set("=(,+-*/^&<>:;")
@@ -67,7 +67,9 @@ class TermXLApp(App):
     CSS = """
     Screen { layout: vertical; }
     #bar { height: 1; width: 1fr; }
-    #namebox { width: 14; height: 1; background: $panel; color: $text; padding: 0 1; text-style: bold; }
+    NameBox { width: 16; height: 1; border: none; padding: 0 1; background: $panel; color: $text;
+              text-style: bold; }
+    NameBox:focus { border: none; background: $boost; }
     #fx { width: 4; height: 1; color: $text-muted; padding: 0 1; }
     FormulaInput { height: 1; border: none; padding: 0 1; width: 1fr; background: $surface; }
     FormulaInput:focus { border: none; background: $boost; }
@@ -97,6 +99,7 @@ class TermXLApp(App):
         Binding("ctrl+pageup", "sheet(-1)", show=False),
         Binding("ctrl+pagedown", "sheet(1)", show=False),
         Binding("f9", "recalc", show=False),
+        Binding("ctrl+f3", "name_manager", "Names", show=False),
         Binding("alt+equals_sign,alt+plus,ctrl+plus,ctrl+equals_sign", "insert", "Insert", show=False),
         Binding("alt+minus,ctrl+minus", "delete", "Delete", show=False),
         Binding("alt+left", "col_width(-1)", show=False),
@@ -123,7 +126,7 @@ class TermXLApp(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="bar"):
-            yield Static("A1", id="namebox")
+            yield NameBox(value="A1", id="namebox", select_on_focus=True)
             yield Static("fx", id="fx")
             yield FormulaInput(id="formula", highlighter=FormulaHighlighter(self), select_on_focus=False)
         yield Grid(id="grid")
@@ -208,11 +211,15 @@ class TermXLApp(App):
             return
         g = self.grid
         sel = g.selection
-        nb = self.query_one("#namebox", Static)
-        if sel.rows * sel.cols > 1 and g._dragging:
-            nb.update(f"{min(sel.rows, MAX_ROW)}R × {sel.cols}C")
-        else:
-            nb.update(addr(*g.active))
+        nb = self.query_one("#namebox", NameBox)
+        if not nb.has_focus:
+            if sel.rows * sel.cols > 1 and g._dragging:
+                label = f"{min(sel.rows, MAX_ROW)}R × {sel.cols}C"
+            else:
+                label = self._name_for_selection() or addr(*g.active)
+            with nb.prevent(Input.Changed):
+                nb.value = label
+                nb.cursor_position = 0
         if self.editing is None:
             inp = self.formula
             text = g.sheet.input_text(*g.active)
@@ -1089,6 +1096,137 @@ class TermXLApp(App):
         self.book.modified = True
         self._switch_sheet_relative(1)
 
+    # ------------------------------------------------------------------ named ranges
+
+    def _name_for_selection(self) -> str | None:
+        """Excel shows a range's name in the address box when the selection matches it."""
+        g = self.grid
+        sel = g.selection
+        if sel.rows * sel.cols == 1 and not g.sheet.merged_at(*g.active):
+            return None
+        for info in names.list_names(self.book):
+            if info.scope is not None and info.scope is not g.sheet:
+                continue
+            target = names.resolve_rect(self.book, info.name, g.sheet)
+            if target is not None and target[0] is g.sheet and target[1] == sel:
+                return info.name
+        return None
+
+    @on(Input.Submitted, "#namebox")
+    def _namebox_submitted(self, event: Input.Submitted):
+        text = event.value.strip()
+        if not text:
+            self.namebox_done()
+            return
+        target = self._resolve_goto(text)
+        if target is not None:
+            sheet, rect = target
+            g = self.grid
+            if sheet is not g.sheet:
+                g.show_sheet(sheet)
+            self._select(rect)
+            self.namebox_done()
+            self.after_change(layout=True)
+            return
+        g = self.grid
+        if self.book.resolve_name(text, g.sheet) is not None:
+            self.notify(f"'{text}' isn't a range (see Name Manager, Ctrl+F3)", severity="warning")
+            self.namebox_done()
+            return
+        try:
+            names.set_name(self.book, text, names.selection_ref(g.sheet, self.book.clip(g.sheet, g.selection)),
+                           None, g.sheet)
+        except ValueError as e:
+            self.notify(str(e), severity="error")
+            return
+        self.set_message(f"Defined name {text} = {names.selection_ref(g.sheet, self.book.clip(g.sheet, g.selection))}")
+        self.namebox_done()
+        self.after_change()
+
+    def namebox_done(self):
+        self.grid.focus()
+        self.grid_changed()
+
+    def name_list(self):
+        """[(NameInfo, current value as text)] for the Name Manager."""
+        from ..formula.evaluator import Ctx, evaluate
+        from ..formula.values import Array, RefValue
+
+        out = []
+        g = self.grid
+        for info in names.list_names(self.book):
+            sheet = info.scope or g.sheet
+            value = ""
+            ast = self.book.resolve_name(info.name, sheet, info.scope.name if info.scope else None) \
+                if info.scope else self.book.names.get(info.name.lower())
+            if ast is not None:
+                try:
+                    v = evaluate(ast, Ctx(self.book, sheet, 1, 1))
+                    if isinstance(v, RefValue):
+                        v = self.book.get_value(v.sheet, v.r1, v.c1) if v.is_cell else f"{{{v.nrows}×{v.ncols} range}}"
+                    elif isinstance(v, Array):
+                        v = f"{{{v.nrows}×{v.ncols} array}}"
+                    value = v if isinstance(v, str) else format_value(v, "General")[0]
+                except Exception:  # noqa: BLE001
+                    value = "?"
+            out.append((info, value))
+        return out
+
+    def action_name_manager(self):
+        if self.editing is not None or self.book is None:
+            return
+        self.push_screen(NameManagerDialog(self))
+
+    def action_define_name(self):
+        if self.editing is not None or self.book is None:
+            return
+        self.open_name_editor(None)
+
+    def open_name_editor(self, info, done=None):
+        g = self.grid
+        book = self.book
+        if info is None:
+            refers = "=" + names.selection_ref(g.sheet, book.clip(g.sheet, g.selection))
+            old = None
+            dlg_args = dict(name="", refers_to=refers, scope=None, editing=False)
+        else:
+            old = (info.name, info.scope)
+            dlg_args = dict(name=info.name, refers_to=info.refers_to, scope=info.scope, editing=True)
+
+        def submit(name, refers, scope):
+            try:
+                names.set_name(book, name, refers, scope, g.sheet, old=old)
+            except ValueError as e:
+                return str(e)
+            self.after_change()
+            return None
+
+        def closed(name):
+            if name:
+                self.set_message(("Updated" if old else "Defined") + f" name {name}")
+            if done is not None:
+                done(name)
+
+        self.push_screen(NameEditDialog(submit, list(book.sheets), **dlg_args), closed)
+
+    def remove_name(self, info):
+        names.delete_name(self.book, info.name, info.scope)
+        self.set_message(f"Deleted name {info.name}")
+        self.after_change()
+
+    def goto_name(self, info) -> bool:
+        target = names.resolve_rect(self.book, info.name, info.scope or self.grid.sheet)
+        if target is None:
+            self.notify(f"{info.name} doesn't refer to a range", severity="warning")
+            return False
+        sheet, rect = target
+        g = self.grid
+        if sheet is not g.sheet:
+            g.show_sheet(sheet)
+        self._select(rect)
+        self.after_change(layout=True)
+        return True
+
     # ------------------------------------------------------------------ navigation dialogs
 
     def action_goto(self):
@@ -1413,6 +1551,9 @@ class TermXLApp(App):
         yield C("Hide sheet", "Hide the current sheet", self.hide_sheet)
         yield C("Unhide all sheets", "Show hidden sheets", self.unhide_sheets)
         yield C("Recalculate all", "Recompute every formula (F9)", self.action_recalc)
+        yield C("Name manager…", "List, create, edit and delete named ranges (Ctrl+F3)", self.action_name_manager)
+        yield C("Define name…", "Name the current selection (or type a name in the address box)",
+                self.action_define_name)
         yield C("Go to…", "Jump to a cell, range or name (Ctrl+G)", self.action_goto)
         yield C("Find…", "Find text (Ctrl+F)", self.action_find)
         yield C("Replace…", "Find and replace (Ctrl+H)", self.action_replace)

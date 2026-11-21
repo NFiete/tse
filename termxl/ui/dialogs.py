@@ -228,6 +228,8 @@ HELP_TEXT = """\
   Ctrl+Space / Shift+Space      select column / row
   Ctrl+A                        select all
   Ctrl+G                        go to a cell, range or name
+  address box (top left)        type a cell or name to go there,
+                                or a new name to name the selection
   Ctrl+PgUp / Ctrl+PgDn         previous / next sheet
 
 [b]Editing[/b]
@@ -245,6 +247,7 @@ HELP_TEXT = """\
   Alt+Left / Alt+Right          narrower / wider column
   Ctrl+F / Ctrl+H               find / replace
   F9                            recalculate everything
+  Ctrl+F3                       name manager: create, edit, delete named ranges
 
 [b]Files[/b]
   Ctrl+S / F12                  save / save as  (.xlsx, .xlsm, .csv)
@@ -276,5 +279,172 @@ class HelpScreen(ModalScreen):
         self.query_one("#helpbody").focus()
 
     @on(Button.Pressed)
+    def action_close(self):
+        self.dismiss(None)
+
+
+class NameEditDialog(ModalScreen):
+    """Create or edit a defined name. on_submit(name, refers_to, scope) -> error text or None."""
+
+    DEFAULT_CSS = DIALOG_CSS + """
+    NameEditDialog Select { width: 60; }
+    NameEditDialog .field { margin-top: 1; }
+    """
+    BINDINGS = [Binding("escape", "cancel", show=False)]
+
+    def __init__(self, on_submit, sheets, name: str = "", refers_to: str = "", scope=None, editing: bool = False):
+        super().__init__()
+        self._on_submit = on_submit
+        self._sheets = sheets
+        self._name, self._refers, self._scope = name, refers_to, scope
+        self._editing = editing
+
+    def compose(self) -> ComposeResult:
+        from textual.widgets import Select
+
+        with Vertical(id="dialog"):
+            yield Label("Edit name" if self._editing else "New name", classes="title")
+            yield Label("Name:")
+            yield Input(value=self._name, placeholder="e.g. TaxRate or Sales_2026", id="name")
+            yield Label("Refers to:", classes="field")
+            yield Input(value=self._refers, placeholder="e.g. Sheet1!$A$1:$B$10, =0.25 or =SUM(Data!B:B)",
+                        id="refers")
+            yield Label("Scope:", classes="field")
+            options = [("Workbook", -1)] + [(s.name, i) for i, s in enumerate(self._sheets)]
+            current = -1 if self._scope is None else self._sheets.index(self._scope)
+            yield Select(options, value=current, allow_blank=False, id="scope", disabled=self._editing)
+            yield Static("References without a sheet name refer to the current sheet.", classes="msg")
+            yield Static("", classes="error", id="error")
+            with Horizontal(classes="buttons"):
+                yield Button("Cancel", id="cancel")
+                yield Button("OK", variant="primary", id="ok")
+
+    def on_mount(self):
+        target = self.query_one("#refers" if self._editing else "#name", Input)
+        target.focus()
+        target.cursor_position = len(target.value)
+
+    @on(Input.Submitted)
+    @on(Button.Pressed, "#ok")
+    def submit(self):
+        from textual.widgets import Select
+
+        name = self.query_one("#name", Input).value.strip()
+        refers = self.query_one("#refers", Input).value
+        idx = self.query_one("#scope", Select).value
+        scope = None if idx == -1 else self._sheets[idx]
+        err = self._on_submit(name, refers, scope)
+        if err:
+            self.query_one("#error", Static).update(err)
+            return
+        self.dismiss(name)
+
+    @on(Button.Pressed, "#cancel")
+    def action_cancel(self):
+        self.dismiss(None)
+
+
+class NameManagerDialog(ModalScreen):
+    """List defined names with New / Edit / Delete / Go to."""
+
+    DEFAULT_CSS = DIALOG_CSS + """
+    NameManagerDialog #dialog { width: 90%; height: 80%; }
+    NameManagerDialog DataTable { height: 1fr; }
+    """
+    BINDINGS = [
+        Binding("escape", "close", "Close", show=False),
+        Binding("n", "new", "New", show=False),
+        Binding("e", "edit", "Edit", show=False),
+        Binding("delete,d", "delete", "Delete", show=False),
+        Binding("g", "goto", "Go to", show=False),
+    ]
+
+    def __init__(self, app_ref):
+        super().__init__()
+        self._app = app_ref
+        self._items = []
+
+    def compose(self) -> ComposeResult:
+        from textual.widgets import DataTable
+
+        with Vertical(id="dialog"):
+            yield Label("Name Manager", classes="title")
+            yield DataTable(cursor_type="row", zebra_stripes=True, id="table")
+            yield Static("", classes="msg", id="msg")
+            with Horizontal(classes="buttons"):
+                yield Button("New… (n)", id="new")
+                yield Button("Edit… (e)", id="edit")
+                yield Button("Delete (d)", id="delete")
+                yield Button("Go to (g)", id="goto")
+                yield Button("Close", variant="primary", id="close")
+
+    def on_mount(self):
+        from textual.widgets import DataTable
+
+        table = self.query_one("#table", DataTable)
+        table.add_columns("Name", "Refers to", "Value", "Scope")
+        self.reload()
+        table.focus()
+
+    def reload(self, select: str | None = None):
+        from textual.widgets import DataTable
+
+        table = self.query_one("#table", DataTable)
+        table.clear()
+        self._items = self._app.name_list()
+        for i, (info, value) in enumerate(self._items):
+            table.add_row(info.name, info.refers_to, value, info.scope_label, key=str(i))
+        msg = self.query_one("#msg", Static)
+        msg.update("No names yet. Press n to define one for the current selection."
+                   if not self._items else f"{len(self._items)} name{'s' if len(self._items) != 1 else ''}")
+        if select is not None:
+            for i, (info, _) in enumerate(self._items):
+                if info.name.lower() == select.lower():
+                    table.move_cursor(row=i)
+                    break
+
+    def _current(self):
+        from textual.widgets import DataTable
+
+        table = self.query_one("#table", DataTable)
+        if not self._items or table.cursor_row is None or table.cursor_row >= len(self._items):
+            return None
+        return self._items[table.cursor_row][0]
+
+    def on_data_table_row_selected(self, event):
+        self.action_edit()
+
+    @on(Button.Pressed, "#new")
+    def action_new(self):
+        self._app.open_name_editor(None, done=self.reload)
+
+    @on(Button.Pressed, "#edit")
+    def action_edit(self):
+        info = self._current()
+        if info is not None:
+            self._app.open_name_editor(info, done=self.reload)
+
+    @on(Button.Pressed, "#delete")
+    def action_delete(self):
+        info = self._current()
+        if info is None:
+            return
+
+        def done(choice):
+            if choice == "delete":
+                self._app.remove_name(info)
+                self.reload()
+
+        self.app.push_screen(ChoiceDialog("Delete name", f"Delete the name '{info.name}'? Formulas that use it "
+                                                         "will show #NAME?. (Ctrl+Z undoes this.)",
+                                          [("delete", "&Delete"), ("cancel", "Cancel")], default="cancel"), done)
+
+    @on(Button.Pressed, "#goto")
+    def action_goto(self):
+        info = self._current()
+        if info is not None and self._app.goto_name(info):
+            self.dismiss(None)
+
+    @on(Button.Pressed, "#close")
     def action_close(self):
         self.dismiss(None)

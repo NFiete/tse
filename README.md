@@ -34,6 +34,9 @@ available. Run it from the source tree with `./txl` or `python3 -m termxl`.
   `#REF!` where needed), find and replace with wildcards, go to, sort, bold/italic/underline,
   colors, alignment, column widths, hide/unhide, freeze panes, adding/renaming/moving/deleting
   sheets, a Sum/Average/Count readout for the selection, mouse support, and dark or light grids.
+- **Named ranges.** Select cells, click the address box (top left), type a name and press Enter.
+  Ctrl+F3 opens a Name Manager to create, edit, rename (formulas follow), delete and jump to
+  names, with workbook or sheet scope. Names can also be constants or formulas (`Rate = 0.0825`).
 
 Press **F1** for the key reference and **Ctrl+P** for the command palette.
 
