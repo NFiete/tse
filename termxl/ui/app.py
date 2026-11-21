@@ -17,7 +17,7 @@ from ..formula.errors import ExcelError
 from ..formula.parser import REFT, FormulaSyntaxError, Unsupported, tokenize
 from ..formula.registry import wildcard_regex
 from ..io import xlsx
-from ..model import names, structure
+from ..model import names, outline, structure
 from ..model.refs import MAX_COL, MAX_ROW, Rect, addr, col_letter, quote_sheet
 from .dialogs import ChoiceDialog, FindDialog, HelpScreen, InputDialog, NameEditDialog, NameManagerDialog
 from .grid import Grid
@@ -104,6 +104,10 @@ class TermXLApp(App):
         Binding("alt+minus,ctrl+minus", "delete", "Delete", show=False),
         Binding("alt+left", "col_width(-1)", show=False),
         Binding("alt+right", "col_width(1)", show=False),
+        Binding("alt+shift+right", "group", show=False),
+        Binding("alt+shift+left", "ungroup", show=False),
+        Binding("alt+shift+up", "outline(True)", show=False),
+        Binding("alt+shift+down", "outline(False)", show=False),
         Binding("escape", "escape", show=False),
         Binding("ctrl+q", "quit_app", "Quit", priority=True),
     ]
@@ -760,6 +764,154 @@ class TermXLApp(App):
                 g.action_move(0, 1)
             else:
                 g.action_move(1, 0)
+        self.after_change(layout=True)
+
+    # ------------------------------------------------------------------ outlines (grouped rows/columns)
+
+    def _selection_axis(self) -> str | None:
+        """'row' or 'col' when whole rows or whole columns are selected, else None."""
+        sel = self.grid.selection
+        full_rows = sel.c1 == 1 and sel.c2 >= MAX_COL
+        full_cols = sel.r1 == 1 and sel.r2 >= MAX_ROW
+        if full_rows != full_cols:
+            return "row" if full_rows else "col"
+        return None
+
+    def _with_axis(self, title: str, then):
+        axis = self._selection_axis()
+        if axis is not None:
+            then(axis)
+            return
+        self.push_screen(ChoiceDialog(title, f"{title} rows or columns?",
+                                      [("row", "&Rows"), ("col", "&Columns"), ("cancel", "Cancel")], default="row"),
+                         lambda v: then(v) if v in ("row", "col") else None)
+
+    def group_selection(self, axis: str, ungroup: bool = False):
+        if self.editing is not None and not self.commit_edit(move=None):
+            return
+        g = self.grid
+        sel = g.selection
+        a, b = (sel.r1, sel.r2) if axis == "row" else (sel.c1, sel.c2)
+        what = "rows" if axis == "row" else "columns"
+        try:
+            fn = outline.ungroup if ungroup else outline.group
+            changed = fn(self.book, g.sheet, axis, a, b)
+        except ValueError as e:
+            self.notify(str(e), severity="error")
+            return
+        if ungroup and not changed:
+            self.set_message(f"Those {what} aren't grouped")
+        else:
+            self.set_message(f"{'Ungrouped' if ungroup else 'Grouped'} {what}")
+        self.after_change(layout=True)
+
+    def action_group(self):
+        if self._need_grid():
+            self._with_axis("Group", lambda axis: self.group_selection(axis))
+
+    def action_ungroup(self):
+        if self._need_grid():
+            self._with_axis("Ungroup", lambda axis: self.group_selection(axis, ungroup=True))
+
+    def _cursor_to_visible(self):
+        """After hiding rows/columns, move the cursor to the nearest cell still showing."""
+        g = self.grid
+        r, c = g.active
+
+        def nearest(i, hidden, limit):
+            for d in range(0, limit):
+                for j in (i + d, i - d):
+                    if 1 <= j <= limit and not hidden(j):
+                        return j
+                if i + d > limit and i - d < 1:
+                    break
+            return i
+
+        nr = nearest(r, g.sheet.row_hidden, MAX_ROW) if g.sheet.row_hidden(r) else r
+        nc = nearest(c, lambda j: g.col_px(j) == 0, MAX_COL) if g.col_px(c) == 0 else c
+        if (nr, nc) != (r, c):
+            g.set_cursor(nr, nc)
+
+    def set_group_collapsed(self, grp, collapse: bool):
+        g = self.grid
+        outline.set_collapsed(self.book, g.sheet, grp, collapse)
+        g.invalidate()
+        if collapse:
+            self._cursor_to_visible()
+        n = grp.end - grp.start + 1
+        what = ("row" if grp.axis == "row" else "column") + ("s" if n != 1 else "")
+        self.set_message(f"{'Collapsed' if collapse else 'Expanded'} {n} {what}")
+        self.after_change(layout=True)
+
+    def toggle_group(self, grp):
+        self.set_group_collapsed(grp, not outline.is_collapsed(self.grid.sheet, grp))
+
+    def _outline_target(self, collapse: bool):
+        """The group the cursor is in (or on the button of) for collapse/expand from the keyboard:
+        the innermost expanded group to collapse, or the outermost collapsed one to expand."""
+        g = self.grid
+        sheet = g.sheet
+        r, c = g.active
+        axis = self._selection_axis()
+        for ax in ([axis] if axis else ["row", "col"]):
+            i = r if ax == "row" else c
+            groups = outline.groups_at(sheet, ax, i)
+            if collapse:
+                cands = [x for x in groups if not outline.is_collapsed(sheet, x)]
+                if cands:
+                    return cands[-1]
+            else:
+                cands = [x for x in groups if x.summary == i and outline.is_collapsed(sheet, x)]
+                if cands:
+                    return cands[0]
+        return None
+
+    def action_outline(self, collapse: bool):
+        if not self._need_grid():
+            return
+        if self.editing is not None and not self.commit_edit(move=None):
+            return
+        grp = self._outline_target(collapse)
+        if grp is None:
+            self.set_message("No group to collapse here" if collapse else
+                             "No collapsed group here — put the cursor on the row or column with the [+]")
+            return
+        self.set_group_collapsed(grp, collapse)
+
+    def show_outline_level(self, axis: str, n: int):
+        g = self.grid
+        if outline.show_level(self.book, g.sheet, axis, n):
+            g.invalidate()
+            self._cursor_to_visible()
+        what = "rows" if axis == "row" else "columns"
+        self.set_message(f"Showing outline level {n} of the {what}")
+        self.after_change(layout=True)
+
+    def outline_all(self, collapse: bool):
+        g = self.grid
+        changed = False
+        for axis in ("row", "col"):
+            top = outline.max_level(g.sheet, axis)
+            if top:
+                changed |= outline.show_level(self.book, g.sheet, axis, 1 if collapse else top + 1)
+        if not outline.max_level(g.sheet, "row") and not outline.max_level(g.sheet, "col"):
+            self.set_message("This sheet has no grouped rows or columns")
+            return
+        g.invalidate()
+        if collapse:
+            self._cursor_to_visible()
+        self.set_message(("Collapsed" if collapse else "Expanded") + " all groups" + ("" if changed else " (no change)"))
+        self.after_change(layout=True)
+
+    def toggle_outline_symbols(self):
+        from openpyxl.worksheet.properties import Outline
+
+        ws = self.grid.sheet.ws
+        pr = ws.sheet_properties.outlinePr
+        if pr is None:
+            pr = ws.sheet_properties.outlinePr = Outline(summaryBelow=True, summaryRight=True)
+        pr.showOutlineSymbols = not outline.symbols_shown(self.grid.sheet)
+        self.book.modified = True
         self.after_change(layout=True)
 
     def number_format_dialog(self):
@@ -1518,6 +1670,24 @@ class TermXLApp(App):
         yield C("Unhide columns", "Unhide columns within the selection", lambda: self.hide("col", False))
         yield C("Hide rows", "Hide the selected rows", lambda: self.hide("row", True))
         yield C("Unhide rows", "Unhide rows within the selection", lambda: self.hide("row", False))
+        yield C("Group rows", "Group the selected rows so they can be collapsed (Alt+Shift+Right)",
+                lambda: self.group_selection("row"))
+        yield C("Group columns", "Group the selected columns so they can be collapsed (Alt+Shift+Right)",
+                lambda: self.group_selection("col"))
+        yield C("Ungroup rows", "Remove the selected rows from their group (Alt+Shift+Left)",
+                lambda: self.group_selection("row", ungroup=True))
+        yield C("Ungroup columns", "Remove the selected columns from their group (Alt+Shift+Left)",
+                lambda: self.group_selection("col", ungroup=True))
+        yield C("Collapse group", "Hide the detail of the group at the cursor (Alt+Shift+Up)",
+                lambda: self.action_outline(True))
+        yield C("Expand group", "Show the detail of the collapsed group at the cursor (Alt+Shift+Down)",
+                lambda: self.action_outline(False))
+        yield C("Collapse all groups", "Collapse every grouped row and column on this sheet",
+                lambda: self.outline_all(True))
+        yield C("Expand all groups", "Expand every grouped row and column on this sheet",
+                lambda: self.outline_all(False))
+        yield C("Show or hide outline symbols", "Toggle the group bars and [+]/[-] buttons",
+                self.toggle_outline_symbols)
         yield C("Number format…", "Choose or type a number format", self.number_format_dialog)
         for name, fmt in NUMBER_FORMATS:
             yield C(f"Format as {name}", fmt, lambda f=fmt: self.apply_number_format(f))

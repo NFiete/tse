@@ -231,6 +231,13 @@ def save(book: Workbook, path: str, active_sheet=None, cursor=None):
         wb.calculation.fullCalcOnLoad = True
     except AttributeError:
         pass
+    from ..model.outline import max_level
+
+    for s in book.sheets:
+        # Excel uses these to draw the outline bars. openpyxl doesn't maintain outlineLevelRow, and
+        # writes outlineLevelCol from column_dimensions.max_outline before it has computed it.
+        s.ws.sheet_format.outlineLevelRow = max_level(s, "row")
+        s.ws.column_dimensions.max_outline = max_level(s, "col")
     if active_sheet is not None:
         idx = wb.worksheets.index(active_sheet.ws)
         wb.active = wb._sheets.index(wb.worksheets[idx])

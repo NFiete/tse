@@ -1,7 +1,7 @@
 """The spreadsheet grid widget: virtualized rendering, navigation and selection."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from rich.cells import cell_len, set_cell_size
 from rich.segment import Segment
@@ -14,6 +14,7 @@ from textual.widget import Widget
 from ..format.numfmt import fit_general, format_value
 from ..format.style import CellLook, StyleResolver, contrast
 from ..formula.errors import ExcelError
+from ..model import outline
 from ..model.refs import MAX_COL, MAX_ROW, Rect, col_letter, parse_addr
 from .theme import DARK, Palette
 
@@ -27,6 +28,18 @@ class Layout:
     frozen_cols: int
     n_frozen_cols_visible: int
     n_frozen_rows_visible: int
+    # outline symbols: a gutter left of the row numbers (2 chars per row level) and a band
+    # above the column letters (1 line per column level)
+    ro_w: int = 0
+    co_h: int = 0
+    nrl: int = 0
+    ncl: int = 0
+    marks: dict = field(default_factory=dict)  # (axis, index, level) -> "bar" | "+" | "-" | None
+
+    @property
+    def cells_x(self) -> int:
+        """x where the row numbers end and the cells begin."""
+        return self.ro_w + self.header_w
 
 
 def _blend(a: str, b: str, t: float) -> str:
@@ -180,17 +193,33 @@ class Grid(Widget, can_focus=True):
     def row_visible(self, r: int) -> bool:
         return not self.sheet.row_hidden(r)
 
+    def bands(self) -> tuple[int, int, int, int]:
+        """-> (row outline levels, column outline levels, row gutter width, column band height)"""
+        s = self.sheet
+        if s is None or not outline.symbols_shown(s):
+            return 0, 0, 0, 0
+        nrl, ncl = outline.max_level(s, "row"), outline.max_level(s, "col")
+        return nrl, ncl, (2 * nrl + 1 if nrl else 0), ncl
+
+    @staticmethod
+    def _header_w(last_row: int, ro_w: int, ncl: int) -> int:
+        w = max(4, len(str(last_row)) + 2)
+        if ncl:  # room for the column level buttons "1 2 …" in the corner
+            w = max(w, 2 * ncl + 2 - ro_w)
+        return w
+
     def layout(self) -> Layout:
         width, height = self.size.width, self.size.height
         if self.sheet._colw is None:
             self.sheet.col_width(1)
+        nrl, ncl, ro_w, co_h = self.bands()
         key = (width, height, self.top, self.left, id(self.sheet), id(self.sheet._colw),
-               self.sheet.ws.freeze_panes, len(self.sheet.ws.row_dimensions))
+               self.sheet.ws.freeze_panes, len(self.sheet.ws.row_dimensions), self.sheet.outline_gen, nrl, ncl)
         if key == self._layout_key and self._layout is not None:
             return self._layout
         fr, fc = self.frozen()
         rows: list[int] = []
-        avail = max(0, height - 1)
+        avail = max(0, height - 1 - co_h)
         r = 1
         while r <= fr and len(rows) < avail:
             if self.row_visible(r):
@@ -203,9 +232,9 @@ class Grid(Widget, can_focus=True):
                 rows.append(r)
             r += 1
         last_row = rows[-1] if rows else 1
-        header_w = max(4, len(str(last_row)) + 2)
+        header_w = self._header_w(last_row, ro_w, ncl)
         cols: list[tuple] = []
-        x = header_w
+        x = ro_w + header_w
         c = 1
         while c <= fc and x < width:
             w = self.col_px(c)
@@ -221,7 +250,7 @@ class Grid(Widget, can_focus=True):
                 cols.append((c, x, w))
                 x += w
             c += 1
-        self._layout = Layout(cols, rows, header_w, fr, fc, nfc, nfr)
+        self._layout = Layout(cols, rows, header_w, fr, fc, nfc, nfr, ro_w, co_h, nrl, ncl)
         self._layout_key = key
         return self._layout
 
@@ -231,7 +260,8 @@ class Grid(Widget, can_focus=True):
 
     def ensure_visible(self, r: int, c: int):
         fr, fc = self.frozen()
-        height = max(1, self.size.height - 1)
+        _, ncl, ro_w, co_h = self.bands()
+        height = max(1, self.size.height - 1 - co_h)
         width = self.size.width
         changed = False
         if r > fr:
@@ -260,8 +290,8 @@ class Grid(Widget, can_focus=True):
                 self.left = c
                 changed = True
             else:
-                header_w = max(4, len(str(self.top + height)) + 2)
-                fixed = header_w + sum(self.col_px(cc) for cc in range(1, fc + 1))
+                header_w = self._header_w(self.top + height, ro_w, ncl)
+                fixed = ro_w + header_w + sum(self.col_px(cc) for cc in range(1, fc + 1))
                 avail = max(1, width - fixed)
                 total, cc = 0, self.left
                 while cc <= c and total <= avail:
@@ -278,23 +308,77 @@ class Grid(Widget, can_focus=True):
             self._layout_key = None
 
     def hit(self, x: int, y: int):
+        """-> ("cell", r, c) | ("row", r) | ("col", c) | ("corner",) | ("outline", Group) |
+        ("level", axis, n) | None"""
         L = self.layout()
-        if y == 0:
-            if x < L.header_w:
-                return ("corner",)
+
+        def col_at():
             for c, cx, w in L.cols:
                 if cx <= x < cx + w:
-                    return ("col", c)
+                    return c
             return None
-        idx = y - 1
+
+        def level_button(n_levels: int):
+            n = x // 2 + 1
+            return n if x % 2 == 0 and n <= n_levels + 1 else None
+
+        if y < L.co_h:
+            if x < L.cells_x:
+                n = level_button(L.ncl) if y == 0 else None
+                return ("level", "col", n) if n else None
+            c = col_at()
+            g = self.outline_group("col", c, y + 1) if c is not None else None
+            return ("outline", g) if g else None
+        if y == L.co_h:
+            if x < L.ro_w:
+                n = level_button(L.nrl)
+                return ("level", "row", n) if n else None
+            if x < L.cells_x:
+                return ("corner",)
+            c = col_at()
+            return ("col", c) if c is not None else None
+        idx = y - L.co_h - 1
         if idx >= len(L.rows):
             return None
         r = L.rows[idx]
-        if x < L.header_w:
+        if x < L.ro_w:
+            lvl = x // 2 + 1
+            g = self.outline_group("row", r, lvl) if lvl <= L.nrl else None
+            return ("outline", g) if g else None
+        if x < L.cells_x:
             return ("row", r)
-        for c, cx, w in L.cols:
-            if cx <= x < cx + w:
-                return ("cell", r, c)
+        c = col_at()
+        return ("cell", r, c) if c is not None else None
+
+    # ------------------------------------------------------------------ outline symbols
+
+    def outline_mark(self, L: Layout, axis: str, i: int, lvl: int):
+        """What to draw for row/column i at outline level lvl: "bar" for a group member,
+        "-" / "+" for the button of an expanded / collapsed group, or None."""
+        key = (axis, i, lvl)
+        m = L.marks.get(key, 0)
+        if m != 0:
+            return m
+        s = self.sheet
+        if outline.level(s, axis, i) >= lvl:
+            m = "bar"
+        else:
+            nb = i - 1 if outline.summary_after(s, axis) else i + 1
+            if nb >= 1 and outline.level(s, axis, nb) >= lvl:
+                m = "+" if outline.is_collapsed(s, outline.group_at(s, axis, nb, lvl)) else "-"
+            else:
+                m = None
+        L.marks[key] = m
+        return m
+
+    def outline_group(self, axis: str, i: int, lvl: int):
+        """The group drawn at row/column i, level lvl (as a member or by its button), if any."""
+        s = self.sheet
+        if outline.level(s, axis, i) >= lvl:
+            return outline.group_at(s, axis, i, lvl)
+        nb = i - 1 if outline.summary_after(s, axis) else i + 1
+        if nb >= 1 and outline.level(s, axis, nb) >= lvl:
+            return outline.group_at(s, axis, nb, lvl)
         return None
 
     # ------------------------------------------------------------------ selection model
@@ -520,6 +604,12 @@ class Grid(Widget, can_focus=True):
         if app.editing is not None:
             if not app.commit_edit(move=None):
                 return
+        if h[0] == "outline":
+            app.toggle_group(h[1])
+            return
+        if h[0] == "level":
+            app.show_outline_level(h[1], h[2])
+            return
         if h[0] == "cell":
             self.set_cursor(h[1], h[2], extend=event.shift)
             self._dragging, self._drag_mode = True, "cell"
@@ -709,13 +799,15 @@ class Grid(Widget, can_focus=True):
         width = self.size.width
         p = self.palette
         sel = self.selection
-        if y == 0:
+        if y < L.co_h:
+            return self._band_strip(L, y, width)
+        if y == L.co_h:
             return self._header_strip(L, sel, width)
-        idx = y - 1
+        idx = y - L.co_h - 1
         if idx >= len(L.rows):
             return Strip([Segment(" " * width, self._style(None, p.bg))], width)
         r = L.rows[idx]
-        segs: list[Segment] = []
+        segs: list[Segment] = self._row_gutter(L, r) if L.ro_w else []
         row_sel = sel.r1 <= r <= sel.r2
         hstyle = self._style(p.header_sel_fg if row_sel else p.header_fg, p.header_sel_bg if row_sel else p.header_bg,
                              bold=row_sel)
@@ -812,10 +904,68 @@ class Grid(Widget, can_focus=True):
             strip = Strip([Segment(s.text, s.style + Style(underline=True)) if s.style else s for s in strip])
         return strip
 
+    def _outline_styles(self) -> tuple[Style, Style, Style]:
+        """-> (background, bar, button)"""
+        p = self.palette
+        base = self._style(p.header_fg, p.header_bg)
+        return base, base, self._style(p.header_sel_fg, p.header_sel_bg, bold=True)
+
+    def _level_buttons(self, n_levels: int, width: int) -> list[Segment]:
+        """Excel's outline level buttons "1 2 …", padded or cut to width."""
+        base, _, button = self._outline_styles()
+        segs = []
+        for k in range(1, n_levels + 2):
+            segs.append(Segment(str(k), button))
+            segs.append(Segment(" ", base))
+        used = 2 * (n_levels + 1)
+        if used > width:
+            return list(Strip(segs).crop(0, width))
+        return segs + [Segment(" " * (width - used), base)]
+
+    def _row_gutter(self, L: Layout, r: int) -> list[Segment]:
+        base, bar, button = self._outline_styles()
+        segs = []
+        for lvl in range(1, L.nrl + 1):
+            m = self.outline_mark(L, "row", r, lvl)
+            if m == "bar":
+                segs.append(Segment("│ ", bar))
+            elif m:
+                segs += [Segment(m, button), Segment(" ", base)]
+            else:
+                segs.append(Segment("  ", base))
+        segs.append(Segment(" ", base))
+        return segs
+
+    def _band_strip(self, L: Layout, y: int, width: int) -> Strip:
+        """One line of the column outline band (level y + 1)."""
+        base, bar, button = self._outline_styles()
+        lvl = y + 1
+        if y == 0:
+            segs = self._level_buttons(L.ncl, L.cells_x)
+        else:
+            segs = [Segment(" " * L.cells_x, base)]
+        after = outline.summary_after(self.sheet, "col")
+        for c, x, w in L.cols:
+            m = self.outline_mark(L, "col", c, lvl)
+            if m == "bar":
+                segs.append(Segment("─" * w, bar))
+            elif m:
+                label = f"[{m}]" if w >= 4 else m
+                pad = " " * (w - len(label))
+                segs += [Segment(label, button), Segment(pad, base)] if after else \
+                    [Segment(pad, base), Segment(label, button)]
+            else:
+                segs.append(Segment(" " * w, base))
+        strip = Strip(segs)
+        if strip.cell_length < width:
+            strip = Strip(segs + [Segment(" " * (width - strip.cell_length), base)])
+        return strip.crop(0, width)
+
     def _header_strip(self, L: Layout, sel: Rect, width: int) -> Strip:
         p = self.palette
         base = self._style(p.header_fg, p.header_bg)
-        segs = [Segment(" " * L.header_w, base)]
+        segs = self._level_buttons(L.nrl, L.ro_w) if L.ro_w else []
+        segs.append(Segment(" " * L.header_w, base))
         for i, (c, x, w) in enumerate(L.cols):
             on = sel.c1 <= c <= sel.c2
             st = self._style(p.header_sel_fg if on else p.header_fg, p.header_sel_bg if on else p.header_bg, bold=on)

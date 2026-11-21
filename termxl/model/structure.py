@@ -15,18 +15,35 @@ from .undo import UndoEntry
 
 def split_col_dims(ws, c: int):
     """Make sure column c has its own ColumnDimension (openpyxl groups ranges like B:D)."""
+    isolate_cols(ws, c, c)
+
+
+def isolate_cols(ws, c1: int, c2: int):
+    """Give every column in c1..c2 its own ColumnDimension. A grouped dimension such as B:XFD is
+    split into the part before the range, one per column inside it, and the part after."""
     for key, dim in list(ws.column_dimensions.items()):
         lo, hi = dim.min, dim.max
-        if lo and hi and lo <= c <= hi and lo != hi:
-            del ws.column_dimensions[key]
-            for cc in range(lo, hi + 1):
-                _clone_coldim(ws, dim, cc)
+        if not lo or not hi or lo == hi or hi < c1 or lo > c2:
+            continue
+        del ws.column_dimensions[key]
+        if lo < c1:
+            _clone_coldim(ws, dim, lo, c1 - 1)
+        for cc in range(max(lo, c1), min(hi, c2) + 1):
+            _clone_coldim(ws, dim, cc)
+        if hi > c2:
+            _clone_coldim(ws, dim, c2 + 1, hi)
+    for cc in range(c1, c2 + 1):
+        letter = col_letter(cc)
+        if letter not in ws.column_dimensions:
+            # width 0 means "default width" and isn't written to the file
+            ws.column_dimensions[letter] = ColumnDimension(ws, index=letter, width=0, min=cc, max=cc)
 
 
-def _clone_coldim(ws, dim, cc: int):
-    letter = col_letter(cc)
+def _clone_coldim(ws, dim, lo: int, hi: int | None = None):
+    hi = lo if hi is None else hi
+    letter = col_letter(lo)
     nd = ColumnDimension(ws, index=letter, width=dim.width, bestFit=dim.bestFit, hidden=dim.hidden,
-                         outlineLevel=dim.outlineLevel, collapsed=dim.collapsed, min=cc, max=cc)
+                         outlineLevel=dim.outlineLevel, collapsed=dim.collapsed, min=lo, max=hi)
     nd._style = copy(dim._style)
     ws.column_dimensions[letter] = nd
     return nd
@@ -218,6 +235,7 @@ def _shift_dims(sheet, axis: str, idx: int, n: int) -> dict:
             new[nr] = d
         dims.clear()
         dims.update(new)
+        sheet.invalidate_layout()  # row outline levels moved
     else:
         mapping = _explode_col_dims(ws)
         new = {}

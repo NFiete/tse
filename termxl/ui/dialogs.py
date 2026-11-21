@@ -245,6 +245,9 @@ HELP_TEXT = """\
   Ctrl+B  Ctrl+I  Ctrl+U        bold, italic, underline  (Alt+B / Alt+I / Alt+U too)
   Alt+=  /  Alt+-               insert / delete rows or columns
   Alt+Left / Alt+Right          narrower / wider column
+  Alt+Shift+Right / Left        group / ungroup rows or columns
+  Alt+Shift+Up / Down           collapse / expand the group at the cursor
+                                (or click the [-] / [+] buttons and level numbers)
   Ctrl+F / Ctrl+H               find / replace
   F9                            recalculate everything
   Ctrl+F3                       name manager: create, edit, delete named ranges
@@ -256,7 +259,7 @@ HELP_TEXT = """\
 
 [b]Everything else[/b]
   Ctrl+P opens the command palette: number formats, alignment, colors, column widths,
-  hide/unhide, freeze panes, sorting, sheet management, light/dark grid and more.
+  hide/unhide, grouping, freeze panes, sorting, sheet management, light/dark grid and more.
 """
 
 

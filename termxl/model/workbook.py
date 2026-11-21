@@ -64,6 +64,9 @@ class Sheet:
         self.max_row = 0
         self.max_col = 0
         self._colw: dict[int, tuple] | None = None
+        self._colo: dict[int, tuple] = {}  # col -> (outline level, collapsed flag), outlined columns only
+        self.outline_gen = 0  # bumped whenever row/column dimensions may have changed
+        self._row_outline_cache = None
         self.recompute_bounds()
 
     @property
@@ -92,6 +95,7 @@ class Sheet:
             default = base + 0.43 if base == 8 else base + 0.71
         self._default_w = float(default)
         cw: dict[int, tuple] = {}
+        co: dict[int, tuple] = {}
         for key, dim in self.ws.column_dimensions.items():
             lo = dim.min or 0
             hi = dim.max or 0
@@ -103,14 +107,24 @@ class Sheet:
                 except Exception:
                     continue
             w = dim.width if (dim.customWidth or dim.width) else None
+            outline = (dim.outlineLevel or 0, bool(dim.collapsed))
             for c in range(lo, min(hi, MAX_COL) + 1):
                 cw[c] = (w if w else self._default_w, bool(dim.hidden))
+                if outline != (0, False):
+                    co[c] = outline
         self._colw = cw
+        self._colo = co
 
     def col_width(self, c: int) -> tuple[float, bool]:
         if self._colw is None:
             self._build_colw()
         return self._colw.get(c, (self._default_w, False))
+
+    def col_outline(self, c: int) -> tuple[int, bool]:
+        """(outline level, collapsed flag) of column c."""
+        if self._colw is None:
+            self._build_colw()
+        return self._colo.get(c, (0, False))
 
     def row_hidden(self, r: int) -> bool:
         d = self.ws.row_dimensions.get(r)
@@ -118,6 +132,7 @@ class Sheet:
 
     def invalidate_layout(self):
         self._colw = None
+        self.outline_gen += 1
 
     def merged_ranges(self):
         return self.ws.merged_cells.ranges
