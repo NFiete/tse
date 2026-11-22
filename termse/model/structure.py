@@ -431,7 +431,8 @@ def _affected(refs, target_sheet, axis: str, idx: int) -> bool:
 def _rewrite_all(book, target_sheet, axis: str, idx: int, f) -> tuple[dict, bool]:
     """Rewrite formula text before cells move.
 
-    Returns ({(sheet, r, c): old_storage_text} in pre-move positions, names_changed).
+    Returns ({(sheet, r, c): old_storage_text} in pre-move positions, names_changed). Formulas
+    left with #REF! lose their saved value; book._damaged_pre keeps (old value, saved value).
     Formulas whose references can't be affected are skipped without re-tokenizing.
     """
     changed = {}
@@ -459,8 +460,9 @@ def _rewrite_all(book, target_sheet, axis: str, idx: int, f) -> tuple[dict, bool
                 if toks is not None:
                     book._pending_tokens[cell] = toks
                 if damage:
+                    # A cut reference makes Excel's saved value wrong: drop it (undo restores it)
                     book._damaged.add(cell)
-                    book._damaged_pre[(s, rc[0], rc[1])] = old
+                    book._damaged_pre[(s, rc[0], rc[1])] = (old, s.cached.pop(rc, None))
     names_changed = False
     for dn in _defined_names(book):
         txt = "=" + (dn.attr_text or "")
@@ -637,6 +639,8 @@ def delete(book, sheet, axis: str, idx: int, n: int = 1, record: bool = True):
     old_tables = tables.snapshot(sheet)
     old_merged = [mr.coord for mr in sheet.ws.merged_cells.ranges]
     old_settings = _settings_state(book) if record else None
+    ai = 0 if axis == "row" else 1
+    old_cached = {rc: v for rc, v in sheet.cached.items() if idx <= rc[ai] < idx + n} if record else None
     # Only references that were cut (not merely shifted) need restoring on undo:
     # re-inserting the rows shifts everything else back exactly.
     old_texts, deleted, removed_dims = _apply(book, sheet, axis, idx, -n)
@@ -655,10 +659,13 @@ def delete(book, sheet, axis: str, idx: int, n: int = 1, record: bool = True):
             cell = ws.cell(row=r, column=c)
             cell._value, cell.data_type, cell._style = value, dtype, copy(style)
             restored.add((sheet, r, c))
-        for (s, r, c), text in old_texts.items():
+        sheet.cached.update(old_cached)
+        for (s, r, c), (text, cached) in old_texts.items():
             cell = s.ws._cells.get((r, c))
             if cell is not None:
                 cell._value = text
+            if cached is not None:
+                s.cached[(r, c)] = cached
             restored.add((s, r, c))
         if axis == "row":
             for r, d in removed_dims.items():

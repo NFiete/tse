@@ -104,6 +104,20 @@ def test_unsupported_function_keeps_cached_value(tmp_path):
     assert (1, 1) in s.stale
 
 
+def _save_with_saved_values(wb, p):
+    """Save wb to p with 42 as the value Excel saved for each formula on the first sheet."""
+    wb.save(p)
+    src = zipfile.ZipFile(p)
+    infos = src.infolist()
+    data = {i.filename: src.read(i.filename) for i in infos}
+    src.close()
+    sheet1 = data["xl/worksheets/sheet1.xml"]
+    data["xl/worksheets/sheet1.xml"] = sheet1.replace(b"<v></v>", b"<v>42</v>").replace(b"<v />", b"<v>42</v>")
+    with zipfile.ZipFile(p, "w") as out:
+        for item in infos:
+            out.writestr(item, data[item.filename])
+
+
 def test_cached_value_survives_reference_rewrites(tmp_path):
     """A formula we can't calculate keeps Excel's saved value when its references are shifted or
     renamed, and loses it only when the cell gets new content (undo brings it back)."""
@@ -115,16 +129,7 @@ def test_cached_value_survives_reference_rewrites(tmp_path):
     wb.active["B1"] = 5
     wb.active["A1"] = "=WEBSERVICE(B1)"
     wb.create_sheet("Other")["A1"] = "=Sheet!A1"
-    wb.save(p)
-    src = zipfile.ZipFile(p)
-    data = {i.filename: src.read(i.filename) for i in src.infolist()}
-    infos = src.infolist()
-    src.close()
-    sheet1 = data["xl/worksheets/sheet1.xml"]
-    data["xl/worksheets/sheet1.xml"] = sheet1.replace(b"<v></v>", b"<v>42</v>").replace(b"<v />", b"<v>42</v>")
-    with zipfile.ZipFile(p, "w") as out:
-        for item in infos:
-            out.writestr(item, data[item.filename])
+    _save_with_saved_values(wb, p)
     book = xlsx.load(p)
     s, other = book.sheets
     structure.insert(book, s, "row", 1, 1)
@@ -139,6 +144,31 @@ def test_cached_value_survives_reference_rewrites(tmp_path):
     assert book.get_value(s, 2, 1) == 42
     book.do_redo()
     assert book.get_value(s, 2, 1) == NAME
+
+
+def test_cached_value_dropped_when_reference_is_deleted(tmp_path):
+    """Deleting a row a formula we can't calculate refers to leaves it with #REF!, so Excel's saved
+    value no longer applies. Undo brings it back, also for formulas in the deleted rows."""
+    from termse.formula.errors import NAME
+    from termse.model import structure
+
+    p = str(tmp_path / "u.xlsx")
+    wb = openpyxl.Workbook()
+    wb.active["B2"] = 5
+    wb.active["A1"] = "=WEBSERVICE(B2)"
+    wb.active["A2"] = "=WEBSERVICE(B1)"
+    _save_with_saved_values(wb, p)
+    book = xlsx.load(p)
+    s = book.sheets[0]
+    structure.delete(book, s, "row", 2, 1)
+    assert s.formulas[(1, 1)].text == "=WEBSERVICE(#REF!)"
+    assert book.get_value(s, 1, 1) == NAME and (1, 1) not in s.stale
+    book.do_undo()
+    assert s.formulas[(1, 1)].text == "=WEBSERVICE(B2)"
+    assert book.get_value(s, 1, 1) == 42 and (1, 1) in s.stale
+    assert book.get_value(s, 2, 1) == 42 and (2, 1) in s.stale
+    book.do_redo()
+    assert book.get_value(s, 1, 1) == NAME
 
 
 def test_csv_roundtrip(tmp_path):
