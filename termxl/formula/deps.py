@@ -112,6 +112,32 @@ class DepGraph:
                         break
         return out
 
+    def dependents_rect(self, sheet, r1: int, c1: int, r2: int, c2: int) -> set:
+        """Formula keys that directly reference any cell of a rectangle."""
+        out: set = set()
+        cell_deps = self.cell_deps
+        if (r2 - r1 + 1) * (c2 - c1 + 1) <= len(cell_deps):
+            for r in range(r1, r2 + 1):
+                for c in range(c1, c2 + 1):
+                    d = cell_deps.get((sheet, r, c))
+                    if d:
+                        out |= d
+        else:
+            for (s, r, c), d in cell_deps.items():
+                if s is sheet and r1 <= r <= r2 and c1 <= c <= c2:
+                    out |= d
+        col_ranges = self.col_ranges
+        for c in range(c1, c2 + 1):
+            ents = col_ranges.get((sheet, c))
+            if ents:
+                for a, b, f in ents:
+                    if a <= r2 and b >= r1:
+                        out.add(f)
+        for wr1, wc1, wr2, wc2, f in self.wide_ranges.get(sheet, ()):
+            if wr1 <= r2 and wr2 >= r1 and wc1 <= c2 and wc2 >= c1:
+                out.add(f)
+        return out
+
     def all_dependents(self, cells) -> set:
         result: set = set()
         frontier = set(cells)

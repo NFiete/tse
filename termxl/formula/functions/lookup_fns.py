@@ -747,3 +747,36 @@ def TRIMRANGE(ctx, rng, trim_rows=MISSING, trim_cols=MISSING):
     rlo, rhi = _trim_span(row_has, tr)
     clo, chi = _trim_span(col_has, tc)
     return Array([row[clo:chi + 1] for row in a.rows[rlo:rhi + 1]])
+
+
+# ------------------------------------------------------------------ spilling
+
+
+@fn("SINGLE", kind="raw", min_args=1, max_args=1)
+def SINGLE(ctx, v):
+    """The @ operator: implicit intersection of a range with the formula's row or column,
+    or the first value of an array."""
+    if isinstance(v, RefValue):
+        if v.is_cell:
+            return v
+        from ..evaluator import intersect
+
+        res = intersect(ctx, v)
+        if isinstance(res, ExcelError):
+            raise XLError(res)
+        return res
+    if isinstance(v, Array):
+        if not v.rows or not v.rows[0]:
+            raise XLError(VALUE)
+        return v.rows[0][0]
+    return v
+
+
+@fn("ANCHORARRAY", kind="raw", min_args=1, max_args=1)
+def ANCHORARRAY(ctx, v):
+    """A1#: the whole range spilled by the formula in A1."""
+    if isinstance(v, ExcelError):
+        raise XLError(v)
+    if not isinstance(v, RefValue):
+        raise XLError(REF)
+    return ctx.engine.spill_ref(v.sheet, v.r1, v.c1)

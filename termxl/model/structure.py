@@ -421,7 +421,7 @@ def _reindex(book, sheet, axis: str, idx: int, n: int, changed_pre: dict, names_
             continue
         cell = s.ws._cells.get((r, c))
         value = s.values.get((r, c))
-        book._unregister(s, r, c)
+        book._unregister(s, r, c, keep_spill=value is not None)
         if cell is not None and cell._value is not None:
             book._register(s, r, c, _formula_text(cell._value), tokens=book._pending_tokens.get(cell))
             if value is not None:
@@ -465,6 +465,7 @@ def _apply(book, sheet, axis: str, idx: int, n: int, table_fill: bool = True):
 def _apply_inner(book, sheet, axis: str, idx: int, n: int, table_fill: bool = True):
     f = _shift_fn(axis, idx, n)
     has_tables = bool(book.table_index().by_name)
+    spill_anchors = book.take_spills(sheet)  # recalculated below, once cells have moved
     changed_pre, names_changed = _rewrite_all(book, sheet, axis, idx, f)
     deleted = _move_cells(sheet, axis, idx, n)
     removed_dims = _shift_dims(sheet, axis, idx, n)
@@ -477,6 +478,13 @@ def _apply_inner(book, sheet, axis: str, idx: int, n: int, table_fill: bool = Tr
     book._pending_tokens = {}
     sheet.recompute_bounds()
     dirty = _dirty_after(book, sheet, axis, idx, n, changed_post)
+    ai = 0 if axis == "row" else 1
+    for rc in spill_anchors:
+        if n < 0 and idx <= rc[ai] <= idx - n - 1:
+            continue  # deleted
+        key = _post_key(sheet, axis, idx, n, (sheet, rc[0], rc[1]))
+        if (key[1], key[2]) in sheet.formulas:
+            dirty.add(key)
     if has_tables:
         from .workbook import _formula_text
 

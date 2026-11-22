@@ -60,7 +60,9 @@ def _load(path: str) -> Workbook:
         raise FileFormatError(f"Not a valid Excel file: {e}") from e
     book = Workbook(wb, path)
     book.register_all()
+    book.mark_legacy()
     _load_cached_values(book, path)
+    book.adopt_arrays(_dynamic_anchors(book, path))
     book.initial_calc()
     book.warnings = detect_unpreservable(path)
     return book
@@ -135,6 +137,42 @@ def _scan_cached(book: Workbook, s, data: bytes):
                 continue
             v = int(fv) if fv.is_integer() and abs(fv) < 2**53 else fv
         s.cached[rc] = (f.text, v)
+
+
+_CM_CELL_RE = re.compile(rb'<(?:\w+:)?c\b([^>]*\bcm="\d+"[^>]*)>')
+
+
+def _dynamic_anchors(book: Workbook, path: str) -> dict:
+    """Array formulas that Excel marked as dynamic arrays (cm="..." on the cell, pointing at
+    XLDAPR cell metadata): {sheet: {(r, c), ...}}. The others are legacy Ctrl+Shift+Enter arrays."""
+    from openpyxl.worksheet.formula import ArrayFormula
+
+    from ..model.refs import col_index
+
+    wanted = {}
+    for s in book.sheets:
+        arrays = {rc for rc, cell in s.ws._cells.items() if isinstance(cell._value, ArrayFormula)}
+        if arrays:
+            wanted[s] = arrays
+    if not wanted:
+        return {}
+    out: dict = {}
+    try:
+        with zipfile.ZipFile(path) as z:
+            parts = _sheet_parts(z)
+            for s, arrays in wanted.items():
+                part = parts.get(s.name)
+                if part is None:
+                    continue
+                for m in _CM_CELL_RE.finditer(z.read(part)):
+                    rm = _ATTR_R_RE.search(m.group(1))
+                    if rm is not None:
+                        rc = (int(rm.group(2)), col_index(rm.group(1).decode()))
+                        if rc in arrays:
+                            out.setdefault(s, set()).add(rc)
+    except Exception:
+        pass
+    return out
 
 
 def _load_cached_values_openpyxl(book: Workbook, path: str):
@@ -255,8 +293,12 @@ def save(book: Workbook, path: str, active_sheet=None, cursor=None):
     fd, tmp = tempfile.mkstemp(prefix=".termxl-", suffix=ext, dir=directory)
     os.close(fd)
     try:
-        wb.save(tmp)
-        _inject_cached_values(tmp, book)
+        restore, dynamic = _materialize_arrays(book)
+        try:
+            wb.save(tmp)
+        finally:
+            _restore_cells(restore)
+        _inject_cached_values(tmp, book, dynamic)
         if os.path.exists(path):
             try:
                 os.chmod(tmp, os.stat(path).st_mode & 0o7777)
@@ -309,9 +351,120 @@ def _sheet_parts(z: zipfile.ZipFile) -> dict[str, str]:
 _CELL_RE = re.compile(r"^([A-Z]+)(\d+)$")
 
 
-def _inject_cached_values(path: str, book: Workbook):
+def _set_plain(cell, v):
+    if isinstance(v, ExcelError):
+        cell._value, cell.data_type = v.code, "e"
+    elif isinstance(v, bool):
+        cell._value, cell.data_type = v, "b"
+    elif isinstance(v, (int, float)):
+        cell._value, cell.data_type = v, "n"
+    else:
+        cell._value, cell.data_type = str(v), "s"
+
+
+def _materialize_arrays(book: Workbook):
+    """Temporarily put spilling formulas and their results into the openpyxl cells the way Excel
+    stores them: the formula cell holds an array formula over the spill range, and the other
+    cells hold the values. Returns (undo list for _restore_cells, {sheet name: {anchor address}}
+    of dynamic-array formulas, which _inject_cached_values marks with cm="1")."""
+    from openpyxl.worksheet.formula import ArrayFormula
+
+    from ..model.refs import addr
+
+    restore: list = []
+    dynamic: dict = {}
+    for s in book.sheets:
+        ws = s.ws
+        cells = ws._cells
+        sp = s.spill
+        for (r, c), f in s.formulas.items():
+            if f.legacy or f.array:
+                continue
+            if (r, c) in sp.anchors:
+                r1, c1, r2, c2 = sp.rect((r, c))
+            elif (r, c) in sp.blocked or f.arrayish:
+                r2, c2 = r, c
+            else:
+                continue
+            cell = cells.get((r, c))
+            if cell is None or not isinstance(cell._value, str):
+                continue
+            ref = addr(r, c) if (r2, c2) == (r, c) else f"{addr(r, c)}:{addr(r2, c2)}"
+            restore.append((ws, (r, c), cell, cell._value, cell.data_type))
+            cell._value = ArrayFormula(ref, cell._value)
+            dynamic.setdefault(s.name, set()).add(addr(r, c))
+        for (ar, ac), rows in sp.anchors.items():
+            for i, row in enumerate(rows):
+                for j, v in enumerate(row):
+                    if v is None or (i == 0 and j == 0):
+                        continue
+                    rc = (ar + i, ac + j)
+                    cell = cells.get(rc)
+                    if cell is not None and cell._value is not None:
+                        continue
+                    created = cell is None
+                    if created:
+                        cell = ws.cell(row=rc[0], column=rc[1])
+                    restore.append((ws, rc, None if created else cell, None, cell.data_type))
+                    _set_plain(cell, v)
+    return restore, dynamic
+
+
+def _restore_cells(restore: list):
+    for ws, rc, cell, value, data_type in reversed(restore):
+        if cell is None:
+            ws._cells.pop(rc, None)
+        else:
+            cell._value, cell.data_type = value, data_type
+
+
+_METADATA_XML = (
+    b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+    b'<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+    b'xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray">'
+    b'<metadataTypes count="1"><metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" '
+    b'pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" '
+    b'clearComments="1" assign="1" coerce="1" cellMeta="1"/></metadataTypes>'
+    b'<futureMetadata name="XLDAPR" count="1"><bk><extLst>'
+    b'<ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}">'
+    b'<xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata>'
+    b'<cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata></metadata>')
+_METADATA_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata"
+_METADATA_CT = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"
+_CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+
+
+def _metadata_parts(zin: zipfile.ZipFile) -> dict[str, bytes]:
+    """The parts to add or change so that cm="1" marks dynamic-array formulas (as Excel writes)."""
+    from lxml import etree
+
+    names = set(zin.namelist())
+    if "xl/metadata.xml" in names:
+        return {}
+    out = {"xl/metadata.xml": _METADATA_XML}
+    rels = etree.fromstring(zin.read("xl/_rels/workbook.xml.rels"))
+    ids = {rel.get("Id") for rel in rels}
+    n = 1
+    while f"rId{n}" in ids:
+        n += 1
+    rel = etree.SubElement(rels, f"{{{_PKG_RNS}}}Relationship")
+    rel.set("Id", f"rId{n}")
+    rel.set("Type", _METADATA_REL)
+    rel.set("Target", "metadata.xml")
+    out["xl/_rels/workbook.xml.rels"] = etree.tostring(rels, xml_declaration=True, encoding="UTF-8",
+                                                       standalone=True)
+    ct = etree.fromstring(zin.read("[Content_Types].xml"))
+    over = etree.SubElement(ct, f"{{{_CT_NS}}}Override")
+    over.set("PartName", "/xl/metadata.xml")
+    over.set("ContentType", _METADATA_CT)
+    out["[Content_Types].xml"] = etree.tostring(ct, xml_declaration=True, encoding="UTF-8", standalone=True)
+    return out
+
+
+def _inject_cached_values(path: str, book: Workbook, dynamic: dict | None = None):
     """openpyxl writes formulas without results; add our computed values so other
-    readers (LibreOffice, Quick Look, pandas...) show numbers immediately."""
+    readers (LibreOffice, Quick Look, pandas...) show numbers immediately. Also mark
+    dynamic-array formulas ({sheet name: {address}}) with cm="1"."""
     if not any(s.formulas for s in book.sheets):
         return
     from lxml import etree
@@ -327,10 +480,14 @@ def _inject_cached_values(path: str, book: Workbook):
                 continue
             root = etree.fromstring(zin.read(part))
             changed = False
+            dyn = (dynamic or {}).get(s.name, ())
             for c in root.iter(f"{{{_NS}}}c"):
                 f = c.find(f"{{{_NS}}}f")
                 if f is None:
                     continue
+                if dyn and c.get("r") in dyn:
+                    c.set("cm", "1")
+                    changed = True
                 m = _CELL_RE.match(c.get("r", ""))
                 if not m:
                     continue
@@ -363,13 +520,17 @@ def _inject_cached_values(path: str, book: Workbook):
                 changed = True
             if changed:
                 replacements[part] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+        if dynamic:
+            replacements.update(_metadata_parts(zin))
         if not replacements:
             return
         tmp = path + ".v"
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
             for item in zin.infolist():
-                data = replacements.get(item.filename)
+                data = replacements.pop(item.filename, None)
                 if data is None:
                     data = zin.read(item.filename)
                 zout.writestr(item, data)
+            for name, data in replacements.items():  # new parts
+                zout.writestr(name, data)
     os.replace(tmp, path)

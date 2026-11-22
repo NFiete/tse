@@ -111,16 +111,22 @@ def test_bare_function_name_in_a_cell(ev):
 
 def test_groupby_round_trip(sales, tmp_path):
     sales["E1"] = "=GROUPBY(A1:A6,C1:C6,SUM)"
-    sales["E2"] = "=INDEX(GROUPBY(A2:A6,C2:C6,SUM),2,2)"
+    sales["H1"] = "=INDEX(GROUPBY(A2:A6,C2:C6,SUM),2,2)"
     p = tmp_path / "g.xlsx"
     xlsx.save(sales.book, str(p))
     import openpyxl
 
-    assert openpyxl.load_workbook(p).active["E1"].value == "=_xlfn.GROUPBY(A1:A6,C1:C6,_xleta.SUM)"
+    saved = openpyxl.load_workbook(p).active
+    assert saved["E1"].value.text == "=_xlfn.GROUPBY(A1:A6,C1:C6,_xleta.SUM)"
+    assert saved["E1"].value.ref == "E1:F4"
+    # needs array evaluation, so it's saved as a one-cell dynamic array
+    assert saved["H1"].value.text == "=INDEX(_xlfn.GROUPBY(A2:A6,C2:C6,_xleta.SUM),2,2)"
+    assert saved["H1"].value.ref == "H1"
     book = xlsx.load(str(p))
     s = book.sheets[0]
     assert s.formulas[(1, 5)].text == "=GROUPBY(A1:A6,C1:C6,SUM)"
-    assert book.get_value(s, 2, 5) == 8
+    assert book.get_value(s, 3, 6) == 8
+    assert book.get_value(s, 1, 8) == 8
     assert not s.stale
 
 

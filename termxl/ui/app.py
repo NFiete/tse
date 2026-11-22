@@ -246,6 +246,7 @@ class TermXLApp(App):
         cells = sheet.ws._cells
         if rect.rows * rect.cols > len(cells):
             keys = [k for k in cells if rect.contains(*k)]
+            keys += [(r, c) for r, c, _ in sheet.spill.cells_in(rect.r1, rect.c1, rect.r2, rect.c2)]
         else:
             keys = list(rect.cells())
         if len(keys) > 500_000:
@@ -291,9 +292,19 @@ class TermXLApp(App):
             sheet = g.sheet
             f = sheet.formulas.get((r, c))
             cell = sheet.ws._cells.get((r, c))
+            spill_from = sheet.spill_anchor(r, c)
             if (r, c) in sheet.stale and f is not None:
                 what = ", ".join(f.unsupported) if f.unsupported else "this formula"
                 msg = f"Showing the value saved by Excel ({what} not supported here)"
+            elif f is not None and (r, c) in sheet.spill.blocked:
+                nr, nc = sheet.spill.blocked[(r, c)]
+                where = Rect(r, c, r + nr - 1, c + nc - 1)
+                msg = (f"Can't spill: the result ({nr}×{nc}) would go past the edge of the sheet"
+                       if where.r2 > MAX_ROW or where.c2 > MAX_COL else
+                       f"Can't spill: {where.a1()} isn't empty")
+            elif spill_from is not None:
+                anchor = sheet.formulas.get(spill_from)
+                msg = f"Spilled from {addr(*spill_from)}: {anchor.text if anchor else ''}"
             elif f is not None and f.error:
                 msg = f"Formula problem: {f.error}"
             elif cell is not None and cell.comment is not None:
@@ -526,6 +537,9 @@ class TermXLApp(App):
             except FormulaSyntaxError as err:
                 self.notify(f"There's a problem with this formula: {err}", severity="error", timeout=6,
                             markup=False)
+                return False
+            except ValueError as err:
+                self.notify(str(err), severity="error", timeout=6, markup=False)
                 return False
         self._end_edit()
         if g.sheet is not e.sheet:

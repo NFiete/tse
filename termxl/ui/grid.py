@@ -115,6 +115,7 @@ class Grid(Widget, can_focus=True):
         self.edit_cell = None  # (sheet, r, c) being edited
         self.edit_text = ""
         self.ref_highlights: list = []  # [(sheet, Rect, color)]
+        self._spill_hl = None  # spilled range around the cursor, set per rendered line
         self.clip_rect = None  # (sheet, Rect)
         self._styles: dict = {}
         self._layout_key = None
@@ -758,8 +759,17 @@ class Grid(Widget, can_focus=True):
             color = color or self.palette.stale_fg
         return text, align, look, color, is_text, False
 
+    def _active_spill(self):
+        """(r1, c1, r2, c2) of the spilled range containing the cursor, if any."""
+        sp = self.sheet.spill
+        if not sp.anchors:
+            return None
+        r, c = self.active
+        anchor = (r, c) if (r, c) in sp.anchors else sp.owner(r, c)
+        return sp.rect(anchor) if anchor is not None else None
+
     def _cell_state(self, r: int, c: int, sel: Rect):
-        """-> (is_cursor, is_selected, ref_color, in_clip)"""
+        """-> (is_cursor, is_selected, ref_color, in_clip, in_spill)"""
         is_cursor = (r, c) == self.active
         is_sel = sel.contains(r, c) and (sel.rows * sel.cols > 1)
         ref = None
@@ -768,12 +778,14 @@ class Grid(Widget, can_focus=True):
                 ref = color
                 break
         clip = self.clip_rect is not None and self.clip_rect[0] is self.sheet and self.clip_rect[1].contains(r, c)
-        return is_cursor, is_sel, ref, clip
+        sp = self._spill_hl
+        spill = sp is not None and sp[0] <= r <= sp[2] and sp[1] <= c <= sp[3]
+        return is_cursor, is_sel, ref, clip, spill
 
     def _piece_styles(self, look, fmt_color, state, editing) -> tuple[Style, Style]:
         """Styles for the content and the gutter of one cell."""
         p = self.palette
-        is_cursor, is_sel, ref, clip = state
+        is_cursor, is_sel, ref, clip, spill = state
         fg, bg = self._base_colors(look, fmt_color)
         gbg = bg
         if ref:
@@ -788,7 +800,7 @@ class Grid(Widget, can_focus=True):
             bg = p.cursor_bg
             fg = p.cursor_fg
         content = self._style(fg, bg, look.bold, look.italic, look.underline or clip, look.strike)
-        gutter_fg = p.copy_fg if clip else p.grid
+        gutter_fg = p.copy_fg if clip else p.spill_fg if spill else p.grid
         gutter = self._style(gutter_fg, gbg)
         return content, gutter
 
@@ -799,6 +811,7 @@ class Grid(Widget, can_focus=True):
         width = self.size.width
         p = self.palette
         sel = self.selection
+        self._spill_hl = self._active_spill()
         if y < L.co_h:
             return self._band_strip(L, y, width)
         if y == L.co_h:
@@ -877,9 +890,9 @@ class Grid(Widget, can_focus=True):
                     ck, _, wk = cols[k]
                     stk = state if k == i else self._cell_state(r, ck, sel)
                     if k > i:
-                        stk = (stk[0] and False, stk[1], stk[2], stk[3])
+                        stk = (False, *stk[1:])
                         if (r, ck) == self.active:
-                            stk = (False, True, stk[2], stk[3])
+                            stk = (False, True, *stk[2:])
                     cs, gs = self._piece_styles(look, color, stk, editing)
                     chunk = full[pos:pos + wk]
                     if k < j - 1:

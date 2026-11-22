@@ -73,6 +73,16 @@ deliberate performance measure for large workbooks; keep it when touching those 
   sheet; volatile formulas are always recalculated. `Workbook.recalc(changed)` dirties dependents
   and evaluates in topological order.
 - `values.py`: runtime types (`RefValue`, `Array`, `MISSING`) and coercion/comparison rules.
+- Spilling: `Workbook._eval` turns an array result into rows (`evaluator.spill_rows`) and
+  `_place_spill` records them in the sheet's `SpillIndex` (`model/spill.py`), or `#SPILL!` if
+  the range isn't empty. Spilled cells have no openpyxl value; `get_value`/`range_rows` look them
+  up via `_spilled`. They aren't in the `DepGraph`: when a spill changes, `_settle_spills`
+  recalculates formulas that read the affected rectangle, and `_spill_watchers` re-runs anchors
+  whose spill range was edited. `A1#` is `Func("ANCHORARRAY")`, `@x` is `Func("SINGLE")`
+  (stored as `_xlfn.ANCHORARRAY(...)`/`_xlfn.SINGLE(...)`). Formulas loaded as plain text are
+  `Formula.legacy` (no spilling; implicit intersection), tracked by cell `id()` in `book.legacy`.
+  On save, `xlsx._materialize_arrays` temporarily writes spills as Excel stores them
+  (array formula + values) and `cm="1"` plus `xl/metadata.xml` mark them as dynamic arrays.
 
 ### Edits and undo
 - All UI cell edits go through `Workbook` methods (`set_input`, `set_style`, `clear`, …) inside

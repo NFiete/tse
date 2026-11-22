@@ -92,6 +92,7 @@ _MASTER = re.compile(
     r"|(?P<op><>|<=|>=|[-+*/^&=<>%:])"
     r"|(?P<punct>[(),;{}])"
 )
+_ERR_AT = re.compile(r"#(?:NULL!|DIV/0!|VALUE!|REF!|NAME\?|NUM!|N/A|SPILL!|CALC!|GETTING_DATA)")
 _CELLPART = re.compile(r"(\$?)([A-Za-z]{1,3})(\$?)(\d+)")
 _ROWPART = re.compile(r"(\$?)(\d+)")
 _COLPART = re.compile(r"(\$?)([A-Za-z]{1,3})")
@@ -290,6 +291,11 @@ def tokenize(src: str) -> list[Token]:
     i, n = 0, len(src)
     match = _MASTER.match
     while i < n:
+        if src[i] == "#" and toks and toks[-1].end == i and toks[-1].kind in (REFT, NAMET) and (
+                toks[-1].kind == NAMET or toks[-1].ref.kind == "cell") and not _ERR_AT.match(src, i):
+            append(Token(OP, "#", i, i + 1))  # spill reference: A1#
+            i += 1
+            continue
         m = match(src, i)
         if m is None:
             ch = src[i]
@@ -315,8 +321,10 @@ def tokenize(src: str) -> list[Token]:
                     continue
                 raise FormulaSyntaxError(f"Invalid reference {text}")
             append(Token(REFT, text, i, j, ref=info))
-        elif kind == "ws" or kind == "at":
+        elif kind == "ws":
             pass
+        elif kind == "at":
+            append(Token(OP, text, i, j))
         elif kind == "num":
             v = float(text)
             if "." not in text and "e" not in text and "E" not in text:
@@ -468,6 +476,7 @@ _INFIX_BP = {
 }
 _POSTFIX_BP = 60
 _PREFIX_BP = 70
+_SPILL_BP = 90  # A1# binds tighter than the range operator
 
 _FUNC_PREFIXES = ("_XLFN._XLWS.", "_XLFN.", "_XLWS.")
 
@@ -521,6 +530,12 @@ class _Parser:
                 self.i += 1
                 left = Unary("%", left)
                 continue
+            if t.text == "#":
+                if _SPILL_BP < min_bp:
+                    break
+                self.i += 1
+                left = Func("ANCHORARRAY", [left], "#")
+                continue
             bp = _INFIX_BP.get(t.text)
             if bp is None or bp < min_bp:
                 break
@@ -543,6 +558,9 @@ class _Parser:
         if k == OP and t.text in "+-":
             arg = self.expr(_PREFIX_BP)
             return Unary(t.text, arg)
+        if k == OP and t.text == "@":
+            # implicit intersection; binds tighter than everything but ':' and '#'
+            return Func("SINGLE", [self.expr(_INFIX_BP[":"])], "@")
         if k == LP:
             node = self.expr(0)
             self.expect(RP)
@@ -737,7 +755,7 @@ XLFN_FUNCS = {
     "RANK.EQ", "RANK.AVG", "NETWORKDAYS.INTL", "WORKDAY.INTL", "AGGREGATE", "MODE.SNGL",
     "PERCENTILE.INC", "PERCENTILE.EXC", "QUARTILE.INC", "QUARTILE.EXC", "SEQUENCE", "UNIQUE",
     "SORT", "SORTBY", "FILTER", "LET", "LAMBDA", "TEXTBEFORE", "TEXTAFTER", "TEXTSPLIT",
-    "CEILING.PRECISE", "FLOOR.PRECISE", "BINOM.DIST",
+    "CEILING.PRECISE", "FLOOR.PRECISE", "BINOM.DIST", "ANCHORARRAY", "SINGLE",
     # dynamic-array and lookup functions
     "TAKE", "DROP", "VSTACK", "HSTACK", "TOCOL", "TOROW", "CHOOSEROWS", "CHOOSECOLS", "EXPAND", "WRAPROWS",
     "WRAPCOLS", "FORMULATEXT", "GROUPBY", "PIVOTBY", "TRIMRANGE", "PERCENTOF",
@@ -773,36 +791,97 @@ def normalize(formula: str) -> str:
     return rewrite_tokens(formula, fn)
 
 
+def _operand_end(toks: list[Token], i: int) -> int:
+    """Index of the last token of the operand starting at toks[i]: a reference, name, function
+    call or bracketed expression, with any following ':' and '#' operators."""
+    n = len(toks)
+    j = i
+    while j < n and toks[j].kind == OP and toks[j].text == "@":
+        j += 1
+    if j >= n:
+        return n - 1
+    if toks[j].kind in (FUNC, LP, LBRACE):
+        close = _match_close(toks, j)
+        j = n - 1 if close is None else close
+    if j + 1 < n and toks[j + 1].kind == OP and toks[j + 1].text == "#":
+        j += 1
+    if j + 2 < n and toks[j + 1].kind == OP and toks[j + 1].text == ":":
+        return _operand_end(toks, j + 2)
+    return j
+
+
+def _match_close(toks: list[Token], i: int) -> int | None:
+    """Index of the ')' or '}' closing the bracket opened by toks[i]."""
+    depth = 0
+    for j in range(i, len(toks)):
+        k = toks[j].kind
+        if k in (FUNC, LP, LBRACE):
+            depth += 1
+        elif k in (RP, RBRACE):
+            depth -= 1
+            if depth == 0:
+                return j
+    return None
+
+
+def _rebuild(body: str, toks: list[Token], repl: dict) -> str:
+    out, pos = [], 0
+    for i in sorted(repl):
+        t = toks[i]
+        out.append(body[pos:t.start])
+        out.append(repl[i])
+        pos = t.end
+    out.append(body[pos:])
+    return "".join(out)
+
+
 def to_storage(formula: str) -> str:
     """Add _xlfn. prefixes required by the xlsx format for newer functions, _xleta. to functions
-    passed as arguments, and spell [@Col] table references as [[#This Row],[Col]]."""
+    passed as arguments, spell [@Col] table references as [[#This Row],[Col]], A1# as
+    _xlfn.ANCHORARRAY(A1) and @x as _xlfn.SINGLE(x)."""
+    if not formula.startswith("="):
+        return formula
+    body = formula[1:]
+    try:
+        toks = tokenize(body)
+    except (FormulaSyntaxError, Unsupported):
+        return formula
     stack: list = []  # enclosing function names (None for plain parentheses and array constants)
-
-    def fn(t: Token):
+    repl: dict[int, str] = {}
+    for i, t in enumerate(toks):
+        new = None
         if t.kind == SREFT:
-            return sref_text(t.value, storage=True) if "thisrow" in t.value.items else None
-        if t.kind in (LP, LBRACE):
+            new = sref_text(t.value, storage=True) if "thisrow" in t.value.items else None
+        elif t.kind in (LP, LBRACE):
             stack.append(None)
-            return None
-        if t.kind in (RP, RBRACE):
+        elif t.kind in (RP, RBRACE):
             if stack:
                 stack.pop()
-            return None
-        if t.kind == NAMET:
+        elif t.kind == NAMET:
             if any(f in ETA_ARG_FUNCS for f in stack) and "!" not in t.text and _is_function_name(t.text):
-                return "_xleta." + canonical_func_name(t.text)
-            return None
-        if t.kind != FUNC:
-            return None
-        name = t.text[:-1]
-        canon = canonical_func_name(name)
-        stack.append(canon)
-        if canon in XLFN_FUNCS and canon == name.upper():
-            prefix = "_xlfn._xlws." if canon in _XLWS_FUNCS else "_xlfn."
-            return prefix + name.upper() + "("
-        return None
-
-    return rewrite_tokens(formula, fn)
+                new = "_xleta." + canonical_func_name(t.text)
+        elif t.kind == FUNC:
+            name = t.text[:-1]
+            canon = canonical_func_name(name)
+            stack.append(canon)
+            if canon in XLFN_FUNCS and canon == name.upper():
+                prefix = "_xlfn._xlws." if canon in _XLWS_FUNCS else "_xlfn."
+                new = prefix + name.upper() + "("
+        if new is not None and new != t.text:
+            repl[i] = new
+    for i, t in enumerate(toks):
+        if t.kind == OP and t.text == "#" and i > 0:
+            repl[i - 1] = "_xlfn.ANCHORARRAY(" + repl.get(i - 1, toks[i - 1].text)
+            repl[i] = ")"
+    for i in range(len(toks) - 1, -1, -1):
+        t = toks[i]
+        if t.kind == OP and t.text == "@" and i + 1 < len(toks):
+            j = _operand_end(toks, i + 1)
+            repl[i] = "_xlfn.SINGLE("
+            repl[j] = repl.get(j, toks[j].text) + ")"
+    if not repl:
+        return formula
+    return "=" + _rebuild(body, toks, repl)
 
 
 def _is_function_name(name: str) -> bool:
@@ -813,22 +892,51 @@ def _is_function_name(name: str) -> bool:
 
 
 def to_display(formula: str) -> str:
-    """Strip _xlfn./_xlws. prefixes for display and editing, and show [#This Row] as @."""
+    """Strip _xlfn./_xlws. prefixes for display and editing, show [#This Row] as @,
+    _xlfn.ANCHORARRAY(A1) as A1# and _xlfn.SINGLE(x) as @x."""
     low = formula.lower()
     if "_xl" not in low and "#this row" not in low:
         return formula
-
-    def fn(t: Token):
+    if not formula.startswith("="):
+        return formula
+    body = formula[1:]
+    try:
+        toks = tokenize(body)
+    except (FormulaSyntaxError, Unsupported):
+        return formula
+    repl: dict[int, str] = {}
+    n = len(toks)
+    for i, t in enumerate(toks):
+        new = None
         if t.kind == SREFT:
-            return sref_text(t.value) if "thisrow" in t.value.items else None
-        if t.kind == NAMET:
-            return t.text[7:] if t.text[:7].upper() == "_XLETA." else None
+            new = sref_text(t.value) if "thisrow" in t.value.items else None
+        elif t.kind == NAMET:
+            new = t.text[7:] if t.text[:7].upper() == "_XLETA." else None
+        elif t.kind == FUNC:
+            canon = canonical_func_name(t.text[:-1])
+            new = canon + "(" if canon != t.text[:-1].upper() else None
+        if new is not None:
+            repl[i] = new
+    for i, t in enumerate(toks):
         if t.kind != FUNC:
-            return None
+            continue
         canon = canonical_func_name(t.text[:-1])
-        return canon + "(" if canon != t.text[:-1].upper() else None
-
-    return rewrite_tokens(formula, fn)
+        if canon == "ANCHORARRAY" and i + 2 < n and toks[i + 1].kind in (REFT, NAMET) \
+                and toks[i + 2].kind == RP and (toks[i + 1].kind == NAMET or toks[i + 1].ref.kind == "cell"):
+            repl[i] = ""
+            repl[i + 2] = "#"
+        elif canon == "SINGLE" and t.text[:-1].upper() != "SINGLE":
+            j = _match_close(toks, i)
+            if j is None or j == i + 1:
+                continue
+            if _operand_end(toks, i + 1) == j - 1:
+                repl[i] = "@"
+                repl[j] = ""
+            else:
+                repl[i] = "@("
+    if not repl:
+        return formula
+    return "=" + _rebuild(body, toks, repl)
 
 
 def is_error_literal(text: str) -> ExcelError | None:

@@ -23,8 +23,9 @@ available. Run it from the source tree with `./txl` or `python3 -m termxl`.
 - **Live formulas.** It has its own parser and recalculation engine with over 300 functions
   (math, statistics, probability distributions and hypothesis tests, regression, logical, lookup,
   text, date/time, information), Excel's type coercion and error values, ranges across sheets,
-  defined names, array arithmetic (`SUMPRODUCT((A:A>5)*B:B)`),
-  and circular-reference detection. Results Excel saved in the file are shown as-is until
+  defined names, array arithmetic (`SUMPRODUCT((A:A>5)*B:B)`), dynamic arrays that spill into
+  neighbouring cells (`=SORT(FILTER(A2:C99,C2:C99>0))`, `=A2:A10*2`, spill references like
+  `=SUM(E2#)`, `@` for implicit intersection), and circular-reference detection. Results Excel saved in the file are shown as-is until
   something they depend on changes.
 - **Excel-style editing.** Type to replace a cell, F2 to edit it. Arrow keys (or the mouse)
   insert references while you write a formula, and F4 toggles `$`. Excel number formats are
@@ -64,10 +65,12 @@ Press **F1** for the key reference and **Ctrl+P** for the command palette.
   The status bar tells you when you're on such a cell.
 - Cutting and pasting a whole table moves its cells but not the table itself. Deleting a table
   column leaves formulas that used it showing `#REF!` without rewriting them.
-- Dynamic-array formulas (`FILTER`, `SORT`, `GROUPBY`, `VSTACK`, `LINEST`, `FREQUENCY`…) work inside
-  other functions (`=SUM(FILTER(...))`, `=INDEX(GROUPBY(A:A,B:B,SUM),2,2)`), but results don't
-  spill into neighbouring cells. A cell shows the first value. GROUPBY and PIVOTBY accept built-in
-  functions such as `SUM` or `PERCENTOF` but not `LAMBDA`.
+- Formulas you type use Excel 365 dynamic-array rules: an array result spills, and shows
+  `#SPILL!` if something is in the way (the status bar says where). Ordinary formulas in a file
+  that predate dynamic arrays keep the older behaviour (a range gives the value in the
+  formula's row, as Excel shows with `=@...`), and old Ctrl+Shift+Enter array formulas fill their
+  fixed range. GROUPBY and PIVOTBY accept built-in functions such as `SUM` or `PERCENTOF` but not
+  `LAMBDA`.
 - Legacy `.xls` and `.xlsb` aren't supported. Convert them first:
   `soffice --headless --convert-to xlsx file.xls`.
 - Ctrl+I only reaches the app in terminals with the kitty keyboard protocol; elsewhere use Alt+I.

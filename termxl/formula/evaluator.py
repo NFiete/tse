@@ -13,11 +13,19 @@ from .values import MISSING, Array, FuncValue, RefValue, compare, fix_number, to
 class Ctx:
     """Evaluation context: the engine plus the formula cell's position."""
 
-    __slots__ = ("engine", "sheet", "row", "col", "depth")
+    __slots__ = ("engine", "sheet", "row", "col", "depth", "arrays", "legacy")
 
     def __init__(self, engine, sheet, row: int, col: int):
         self.engine, self.sheet, self.row, self.col = engine, sheet, row, col
         self.depth = 0
+        # Set when evaluation worked on arrays (an operator or function mapped over a range, or a
+        # function returned an array): the formula needs dynamic-array semantics.
+        self.arrays = False
+        # Pre-dynamic-array semantics: a range where a single value is expected gives the cell in
+        # the formula's row or column (implicit intersection) instead of being mapped over.
+        # Arguments of functions that take ranges or arrays (SUMPRODUCT, INDEX...) are still
+        # evaluated as arrays.
+        self.legacy = False
 
 
 def _is_multi(v) -> bool:
@@ -54,6 +62,10 @@ def lift(ctx: Ctx, fn, args: list, errors_ok: bool = False):
                 if isinstance(v, ExcelError):
                     return v
         return _safe(fn, *vals)
+    if ctx.legacy and any(isinstance(a, RefValue) and not a.is_cell for a in args):
+        args = [intersect(ctx, a) if isinstance(a, RefValue) and not a.is_cell else a for a in args]
+        return lift(ctx, fn, args, errors_ok)
+    ctx.arrays = True
     arrs = [to_array(ctx, a) if _is_multi(a) else None for a in args]
     nr = max(a.nrows for a in arrs if a is not None)
     nc = max(a.ncols for a in arrs if a is not None)
@@ -243,6 +255,13 @@ def _call(node: Func, ctx: Ctx):
             return spec.impl(ctx, *thunks)
         except XLError as e:
             return e.err
+    if ctx.legacy and spec.kind == "raw":
+        ctx.legacy = False
+        try:
+            args = [evaluate(a, ctx) for a in node.args]
+        finally:
+            ctx.legacy = True
+        return _apply(spec, ctx, args)
     return _apply(spec, ctx, [evaluate(a, ctx) for a in node.args])
 
 
@@ -262,26 +281,82 @@ def _apply(spec, ctx: Ctx, args: list):
                 return fix_number(r)
             except XLError as e:
                 return e.err
+        if t is Array:
+            ctx.arrays = True
         return r
     return lift(ctx, spec.impl, args, spec.errors_ok)
 
 
-def finalize(ctx: Ctx, v):
-    """Turn an evaluation result into a cell value."""
+def intersect(ctx: Ctx, v: RefValue):
+    """Implicit intersection: the cell of a range in the formula's row or column, else #VALUE!."""
+    r, c = ctx.row, ctx.col
+    if v.c1 == v.c2 and v.r1 <= r <= v.r2:
+        return RefValue(v.sheet, r, v.c1, r, v.c1)
+    if v.r1 == v.r2 and v.c1 <= c <= v.c2:
+        return RefValue(v.sheet, v.r1, c, v.r1, c)
+    if v.r1 <= r <= v.r2 and v.c1 <= c <= v.c2:
+        return RefValue(v.sheet, r, c, r, c)
+    return VALUE
+
+
+def finalize(ctx: Ctx, v, legacy: bool = False):
+    """Turn an evaluation result into a cell value. Arrays and ranges give their first value,
+    or with legacy=True (formulas from files without dynamic-array support) a range gives the
+    cell in the formula's row or column (implicit intersection)."""
     if isinstance(v, RefValue):
-        if v.is_cell:
-            v = ctx.engine.get_value(v.sheet, v.r1, v.c1)
-        else:
+        if legacy and not v.is_cell:
+            v = intersect(ctx, v)
+            if isinstance(v, ExcelError):
+                return v
+        if isinstance(v, RefValue):
             v = ctx.engine.get_value(v.sheet, v.r1, v.c1)
     elif isinstance(v, Array):
         v = v.rows[0][0] if v.rows and v.rows[0] else NA
+    return _cell_value(v)
+
+
+def _cell_value(v, blank=0):
     if v is None or v is MISSING:
-        return 0
+        return blank
     if isinstance(v, FuncValue):
         return NAME
     if type(v) is float and (math.isnan(v) or math.isinf(v)):
         return NUM
     return v
+
+
+def is_multi(v) -> bool:
+    """Whether a result is an array or multi-cell range (i.e. a candidate for spilling)."""
+    return isinstance(v, Array) or (isinstance(v, RefValue) and not v.is_cell)
+
+
+def spill_rows(ctx: Ctx, v, size: tuple | None = None) -> list | None:
+    """The cell values an array result spills into, as a list of rows, or None if the result is
+    a single value. With size=(rows, cols) (legacy array formulas) the result is fitted to that
+    size: single rows/columns repeat, and positions past the result's edge are #N/A."""
+    if isinstance(v, RefValue):
+        if v.is_cell and size is None:
+            return None
+        src = ctx.engine.range_rows(v.sheet, v.r1, v.c1, v.r2, v.c2)
+        rows = [[_cell_value(x) for x in row] for row in src]
+    elif isinstance(v, Array):
+        if not v.rows or not v.rows[0]:
+            return None
+        width = max(len(r) for r in v.rows)
+        rows = [[_cell_value(x, None) for x in row] + [NA] * (width - len(row)) for row in v.rows]
+    elif size is None:
+        return None
+    else:
+        rows = [[_cell_value(_deref(ctx, v))]]
+    if size is not None:
+        nr, nc = size
+        ar, ac = len(rows), len(rows[0])
+        rows = [[(rows[0 if ar == 1 else i][0 if ac == 1 else j]
+                  if (ar == 1 or i < ar) and (ac == 1 or j < ac) else NA) for j in range(nc)]
+                for i in range(nr)]
+    elif len(rows) == 1 and len(rows[0]) == 1:
+        return None
+    return rows
 
 
 def walk(node: Node):

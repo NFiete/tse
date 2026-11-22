@@ -18,7 +18,7 @@ from openpyxl.worksheet.formula import ArrayFormula
 
 from ..formula import evaluator as ev
 from ..formula.deps import DepGraph
-from ..formula.errors import CIRC, ERROR_CODES, NAME, VALUE, Unsupported, XLError
+from ..formula.errors import CIRC, ERROR_CODES, NAME, REF, SPILL, VALUE, ExcelError, Unsupported, XLError
 from ..formula.functions import date_fns
 from ..formula.parser import (
     Binary, Func, FormulaSyntaxError, NameNode, RefNode, StructRef, StructRefNode, normalize, parse,
@@ -27,6 +27,7 @@ from ..formula.parser import (
 from .dates import to_serial
 from .inputparse import parse_input
 from .refs import MAX_COL, MAX_ROW, Rect, col_letter
+from .spill import SpillIndex
 from .undo import UndoEntry, UndoStack
 
 sys.setrecursionlimit(max(sys.getrecursionlimit(), 20000))
@@ -40,9 +41,13 @@ _FORMAT_INHERITING = {"SUM", "AVERAGE", "MIN", "MAX", "MEDIAN", "ROUND", "ROUNDU
                       "HLOOKUP", "XLOOKUP", "LOOKUP", "MROUND", "CEILING", "FLOOR", "TRUNC"}
 
 
+# Returned by Workbook._compute instead of spill rows: leave the formula's spill as it is.
+_KEEP = object()
+
+
 class Formula:
     __slots__ = ("text", "ast", "volatile", "unsupported", "error", "array", "positional", "structured",
-                 "uses_names")
+                 "uses_names", "legacy", "arrayish")
 
     def __init__(self, text: str):
         self.text = text  # display form, with leading '='
@@ -54,6 +59,10 @@ class Formula:
         self.positional = False  # uses ROW()/COLUMN(): value depends on where the cell is
         self.structured = False  # uses table references: re-resolve when tables change
         self.uses_names = False
+        # From a file, saved as an ordinary formula: no spilling, ranges use implicit intersection.
+        self.legacy = False
+        # The last result was an array or range (saved as a dynamic-array formula).
+        self.arrayish = False
 
 
 class Sheet:
@@ -64,6 +73,7 @@ class Sheet:
         self.values: dict[tuple, object] = {}
         self.cached: dict[tuple, tuple] = {}  # (r,c) -> (storage text, cached value from file)
         self.stale: set[tuple] = set()  # cells showing a cached value we could not recompute
+        self.spill = SpillIndex()
         self.max_row = 0
         self.max_col = 0
         self._colw: dict[int, tuple] | None = None
@@ -80,7 +90,7 @@ class Sheet:
         return f"<Sheet {self.name}>"
 
     def recompute_bounds(self):
-        mr = mc = 0
+        mr, mc = self.spill.extent()
         for (r, c), cell in self.ws._cells.items():
             if cell._value is not None:
                 if r > mr:
@@ -161,7 +171,21 @@ class Sheet:
 
     def number_format(self, r: int, c: int) -> str:
         cell = self.ws._cells.get((r, c))
-        return cell.number_format if cell is not None else "General"
+        fmt = cell.number_format if cell is not None else "General"
+        if fmt == "General" and self.spill.cols:
+            anchor = self.spill.owner(r, c)
+            if anchor is not None and anchor != (r, c):
+                src = self.ws._cells.get(anchor)
+                if src is not None:
+                    return src.number_format
+        return fmt
+
+    def spill_anchor(self, r: int, c: int):
+        """The formula cell whose spilled result covers (r, c) (not counting the formula cell itself)."""
+        if not self.spill.cols:
+            return None
+        anchor = self.spill.owner(r, c)
+        return None if anchor == (r, c) else anchor
 
     def input_text(self, r: int, c: int) -> str:
         """Text to show in the formula bar / editor for a cell."""
@@ -220,6 +244,8 @@ class Workbook:
         self._tx_tables: dict | None = None
         self._tx_names: dict | None = None
         self._tx_expand = False
+        self.legacy: set[int] = set()  # id()s of cells holding formulas loaded without dynamic-array support
+        self._spill_changed: list = []  # (sheet, r1, c1, r2, c2, anchor) whose spilled values changed
         self._load_names()
 
     # ------------------------------------------------------------------ setup
@@ -265,7 +291,7 @@ class Workbook:
         for s in self.sheets:
             for rc, f in s.formulas.items():
                 cached = s.cached.get(rc)
-                if cached is None or cached[1] is None or f.volatile:
+                if cached is None or cached[1] is None or f.volatile or (cached[1] is SPILL and not f.legacy):
                     dirty.add((s, rc[0], rc[1]))
                 else:
                     s.values[rc] = cached[1]
@@ -348,7 +374,7 @@ class Workbook:
                 if cell is None or cell.data_type != "f" or cell._value is None:
                     continue
                 value = s.values.get(rc)
-                self._unregister(s, rc[0], rc[1])
+                self._unregister(s, rc[0], rc[1], keep_spill=value is not None)
                 self._register(s, rc[0], rc[1], _formula_text(cell._value), array=isinstance(cell._value, ArrayFormula))
                 if value is not None:
                     s.values[rc] = value
@@ -358,6 +384,7 @@ class Workbook:
     def tables_changed(self, extra=()) -> set:
         """Re-resolve table references and recalculate what depends on them."""
         changed = self.reregister_structured() | set(extra)
+        changed |= self._spill_watchers(changed)
         dirty = self.graph.all_dependents(changed)
         dirty |= {k for k in changed if (k[1], k[2]) in k[0].formulas}
         vol = self.graph.volatile
@@ -365,6 +392,8 @@ class Workbook:
             dirty |= vol | self.graph.all_dependents(vol)
         if dirty:
             self._run(dirty)
+        elif self._spill_changed:
+            dirty = self._settle_spills()
         self.modified = True
         return dirty | set(extra)
 
@@ -380,14 +409,16 @@ class Workbook:
             return sheet.values.get(rc, 0)
         cell = sheet.ws._cells.get(rc)
         if cell is None:
-            return None
+            return self._spilled(sheet, r, c) if sheet.spill.cols else None
         v = cell._value
         t = type(v)
+        if v is None:
+            return self._spilled(sheet, r, c) if sheet.spill.cols else None
         if t is str:
             if cell.data_type == "e":
                 return ERROR_CODES.get(v.upper(), VALUE)
             return v
-        if v is None or t is int or t is float or t is bool:
+        if t is int or t is float or t is bool:
             return v
         if isinstance(v, _DATE_TYPES):
             return to_serial(v, self.epoch1904)
@@ -398,6 +429,7 @@ class Workbook:
         formulas, values, cells = sheet.formulas, sheet.values, sheet.ws._cells
         dirty = self.dirty
         get_value = self.get_value
+        spilled = self._spilled if sheet.spill.cols else None
         rows = []
         cols = range(c1, c2 + 1)
         for r in range(r1, r2 + 1):
@@ -413,11 +445,13 @@ class Workbook:
                     continue
                 cell = cells.get(rc)
                 if cell is None:
-                    ap(None)
+                    ap(None if spilled is None else spilled(sheet, r, c))
                     continue
                 v = cell._value
                 t = type(v)
-                if t is int or t is float or v is None or t is bool or (t is str and cell.data_type != "e"):
+                if v is None and spilled is not None:
+                    ap(spilled(sheet, r, c))
+                elif t is int or t is float or v is None or t is bool or (t is str and cell.data_type != "e"):
                     ap(v)
                 else:
                     ap(get_value(sheet, r, c))
@@ -428,7 +462,10 @@ class Workbook:
         """Non-blank values of a rectangle in row-major order."""
         if (r2 - r1 + 1) * (c2 - c1 + 1) > 4 * len(sheet.ws._cells) + 64:
             # sparse: walk the existing cells instead of every position
-            keys = sorted(k for k in sheet.ws._cells if r1 <= k[0] <= r2 and c1 <= k[1] <= c2)
+            keys = {k for k in sheet.ws._cells if r1 <= k[0] <= r2 and c1 <= k[1] <= c2}
+            if sheet.spill.anchors:
+                keys.update((r, c) for r, c, _ in sheet.spill.cells_in(r1, c1, r2, c2))
+            keys = sorted(keys)
             out = []
             for r, c in keys:
                 v = self.get_value(sheet, r, c)
@@ -442,6 +479,203 @@ class Workbook:
                     out.append(v)
         return out
 
+    # ------------------------------------------------------------------ spilling
+
+    def _spilled(self, sheet: Sheet, r: int, c: int):
+        """Value of an empty cell that may be covered by a spilled array."""
+        sp = sheet.spill
+        anchor = sp.owner(r, c)
+        if anchor is None:
+            return None
+        key = (sheet, anchor[0], anchor[1])
+        if key in self.evaluating:
+            return CIRC  # the formula reads its own spill range
+        if self.dirty and key in self.dirty:
+            self._eval(key)
+            anchor = sp.owner(r, c)
+            if anchor is None:
+                return None
+        return sp.value(anchor, r, c)
+
+    def spill_ref(self, sheet: Sheet, r: int, c: int):
+        """The range spilled by the formula in (r, c), for A1# references."""
+        from ..formula.values import RefValue
+
+        if (r, c) not in sheet.formulas:
+            return REF
+        self.get_value(sheet, r, c)  # make sure it's up to date
+        sp = sheet.spill
+        if (r, c) in sp.anchors:
+            return RefValue(sheet, *sp.rect((r, c)))
+        if (r, c) in sp.blocked:
+            return REF
+        return RefValue(sheet, r, c, r, c)
+
+    def _spill_blocked(self, sheet: Sheet, r: int, c: int, r2: int, c2: int) -> bool:
+        """Whether anything is in the way of spilling from (r, c) to (r2, c2)."""
+        if r2 > MAX_ROW or c2 > MAX_COL:
+            return True
+        cells = sheet.ws._cells
+        if (r2 - r + 1) * (c2 - c + 1) <= 4 * len(cells):
+            for rr in range(r, r2 + 1):
+                for cc in range(c, c2 + 1):
+                    cell = cells.get((rr, cc))
+                    if cell is not None and (cell._value is not None or isinstance(cell, MergedCell)) \
+                            and (rr, cc) != (r, c):
+                        return True
+        else:
+            for (rr, cc), cell in cells.items():
+                if r <= rr <= r2 and c <= cc <= c2 and (rr, cc) != (r, c) and (
+                        cell._value is not None or isinstance(cell, MergedCell)):
+                    return True
+        for mr in sheet.ws.merged_cells.ranges:
+            if mr.min_row <= r2 and mr.max_row >= r and mr.min_col <= c2 and mr.max_col >= c:
+                return True
+        return sheet.spill.overlaps(r, c, r2, c2, exclude=(r, c))
+
+    def _place_spill(self, sheet: Sheet, r: int, c: int, rows, fixed: bool):
+        """Record a formula's spilled result (rows=None: it no longer spills). Returns the value
+        for the formula cell itself."""
+        sp = sheet.spill
+        anchor = (r, c)
+        old = sp.remove(anchor)
+        sp.blocked.pop(anchor, None)
+        if rows is None:
+            if old is not None:
+                self._spill_changed.append((sheet, r, c, r + len(old) - 1, c + len(old[0]) - 1, anchor))
+            return None
+        r2, c2 = r + len(rows) - 1, c + len(rows[0]) - 1
+        if not fixed and self._spill_blocked(sheet, r, c, r2, c2):
+            sp.blocked[anchor] = (len(rows), len(rows[0]))
+            if old is not None:
+                self._spill_changed.append((sheet, r, c, r + len(old) - 1, c + len(old[0]) - 1, anchor))
+            return SPILL
+        sp.add(anchor, rows)
+        if old != rows:
+            if old is not None:
+                r2 = max(r2, r + len(old) - 1)
+                c2 = max(c2, c + len(old[0]) - 1)
+            self._spill_changed.append((sheet, r, c, r2, c2, anchor))
+        if r2 > sheet.max_row:
+            sheet.max_row = min(r2, MAX_ROW)
+        if c2 > sheet.max_col:
+            sheet.max_col = min(c2, MAX_COL)
+        return rows[0][0]
+
+    def _drop_spill(self, sheet: Sheet, r: int, c: int):
+        sp = sheet.spill
+        if sp:
+            sp.blocked.pop((r, c), None)
+            if (r, c) in sp.anchors:
+                self._place_spill(sheet, r, c, None, False)
+
+    def _spill_watchers(self, keys) -> set:
+        """Formulas whose spill area (actual, or wanted but blocked) contains any of the cells."""
+        out = set()
+        for key in keys:
+            sheet, r, c = key
+            sp = sheet.spill
+            if not sp:
+                continue
+            anchor = sp.owner(r, c) if sp.cols else None
+            if anchor is not None and anchor != (r, c):
+                out.add((sheet, anchor[0], anchor[1]))
+            for ar, ac in sp.blocked_in(r, c, r, c):
+                if (ar, ac) != (r, c):
+                    out.add((sheet, ar, ac))
+        return out
+
+    def take_spills(self, sheet: Sheet) -> list:
+        """Forget a sheet's spills (before its cells move); returns the formula positions that
+        spilled or were blocked, so they can be recalculated afterwards."""
+        sp = sheet.spill
+        anchors = list(sp.anchors) + list(sp.blocked)
+        sp.clear()
+        return anchors
+
+    def mark_legacy(self):
+        """Note that the ordinary formulas just loaded from a file use pre-dynamic-array semantics."""
+        legacy = self.legacy
+        for s in self.sheets:
+            cells = s.ws._cells
+            for rc, f in s.formulas.items():
+                cell = cells.get(rc)
+                if cell is not None and isinstance(cell._value, str):
+                    legacy.add(id(cell))
+                    f.legacy = True
+
+    def adopt_arrays(self, dynamic: dict):
+        """Take over array formulas loaded from a file. The other cells of an array formula's
+        range hold its saved results as plain values: move those into the spill index.
+        dynamic: {sheet: {(r, c), ...}} anchors of dynamic-array (spilling) formulas; the rest are
+        legacy Ctrl+Shift+Enter arrays with a fixed size."""
+        from openpyxl.utils.cell import range_boundaries
+
+        for s in self.sheets:
+            cells = s.ws._cells
+            dyn = dynamic.get(s, ())
+            for (r, c), cell in list(cells.items()):
+                value = cell._value
+                if cell.data_type != "f" or not isinstance(value, ArrayFormula):
+                    continue
+                try:
+                    c1, r1, c2, r2 = range_boundaries(value.ref) if value.ref else (c, r, c, r)
+                except (TypeError, ValueError):
+                    c1, r1, c2, r2 = c, r, c, r
+                if (r1, c1) != (r, c):
+                    c2, r2 = c + (c2 - c1), r + (r2 - r1)
+                cached = s.cached.get((r, c))
+                rows = []
+                for rr in range(r, r2 + 1):
+                    row = []
+                    for cc in range(c, c2 + 1):
+                        if (rr, cc) == (r, c):
+                            row.append(cached[1] if cached is not None else None)
+                            continue
+                        other = cells.get((rr, cc))
+                        if other is None or other._value is None or other.data_type == "f":
+                            row.append(None)
+                            continue
+                        row.append(self.get_value(s, rr, cc))
+                        other._value = None
+                        other.data_type = "n"
+                    rows.append(row)
+                if (r, c) in dyn:
+                    self.legacy.discard(id(cell))
+                    cell._value = _formula_text(value)
+                value_before = s.values.get((r, c))
+                self._unregister(s, r, c)
+                f = self._register(s, r, c, _formula_text(cell._value), array=isinstance(cell._value, ArrayFormula))
+                f.arrayish = (r, c) in dyn
+                if value_before is not None:
+                    s.values[(r, c)] = value_before
+                if len(rows) > 1 or len(rows[0]) > 1:
+                    s.spill.add((r, c), rows)
+            s.recompute_bounds()
+
+    def _array_size(self, sheet: Sheet, r: int, c: int):
+        """(rows, cols) of a legacy array formula's fixed range."""
+        from openpyxl.utils.cell import range_boundaries
+
+        cell = sheet.ws._cells.get((r, c))
+        value = cell._value if cell is not None else None
+        if not isinstance(value, ArrayFormula) or not value.ref:
+            return (1, 1)
+        try:
+            c1, r1, c2, r2 = range_boundaries(value.ref)
+        except (TypeError, ValueError):
+            return (1, 1)
+        return (r2 - r1 + 1, c2 - c1 + 1)
+
+    def array_part(self, sheet: Sheet, r: int, c: int):
+        """The anchor of the legacy (fixed-size) array formula covering (r, c), if any."""
+        anchor = sheet.spill_anchor(r, c)
+        if anchor is not None:
+            f = sheet.formulas.get(anchor)
+            if f is not None and f.array:
+                return anchor
+        return None
+
     # ------------------------------------------------------------------ formula registration
 
     def _register(self, sheet: Sheet, r: int, c: int, storage_text: str, array: bool = False, tokens=None):
@@ -452,6 +686,9 @@ class Workbook:
 
             f.text = display_in_place(self, display, sheet, r, c)
         f.array = array
+        if self.legacy:
+            cell = sheet.ws._cells.get((r, c))
+            f.legacy = cell is not None and id(cell) in self.legacy and not array
         key = (sheet, r, c)
         try:
             f.ast = parse_tokens(tokens) if tokens is not None else parse(display)
@@ -514,11 +751,15 @@ class Workbook:
                 dynamic = True
         return dynamic
 
-    def _unregister(self, sheet: Sheet, r: int, c: int):
+    def _unregister(self, sheet: Sheet, r: int, c: int, keep_spill: bool = False):
+        """Forget a cell's formula. keep_spill=True when it's re-registered straight away with its
+        old value kept."""
         if sheet.formulas.pop((r, c), None) is not None:
             sheet.values.pop((r, c), None)
             sheet.stale.discard((r, c))
             self.graph.remove((sheet, r, c))
+            if not keep_spill:
+                self._drop_spill(sheet, r, c)
 
     # ------------------------------------------------------------------ evaluation
 
@@ -530,36 +771,52 @@ class Workbook:
             return
         self.evaluating.add(key)
         try:
-            v = self._compute(sheet, r, c, f)
+            v, rows = self._compute(sheet, r, c, f)
         finally:
             self.evaluating.discard(key)
+        if rows is not _KEEP and (rows is not None or sheet.spill):
+            top = self._place_spill(sheet, r, c, rows, f.array)
+            if rows is not None:
+                v = top
         sheet.values[(r, c)] = v
         self.dirty.discard(key)
 
     def _compute(self, sheet: Sheet, r: int, c: int, f: Formula):
+        """-> (value, spill rows or None, or _KEEP to leave the spill as it is)"""
         cached = sheet.cached.get((r, c))
         has_cache = cached is not None and cached[0] == f.text
         if f.ast is None or f.unsupported:
             if has_cache:
                 sheet.stale.add((r, c))
-                return cached[1]
-            return NAME
+                return cached[1], _KEEP
+            return NAME, None
         ctx = ev.Ctx(self, sheet, r, c)
+        ctx.legacy = f.legacy
+        rows = None
         try:
-            v = ev.finalize(ctx, ev.evaluate(f.ast, ctx))
+            res = ev.evaluate(f.ast, ctx)
+            if f.legacy:
+                v = ev.finalize(ctx, res, legacy=True)
+            else:
+                f.arrayish = ctx.arrays or ev.is_multi(res)
+                size = self._array_size(sheet, r, c) if f.array else None
+                if size == (1, 1):
+                    size = None
+                rows = ev.spill_rows(ctx, res, size)
+                v = rows[0][0] if rows is not None else ev.finalize(ctx, res)
         except XLError as e:
             v = e.err
         except Unsupported:
             if has_cache:
                 sheet.stale.add((r, c))
-                return cached[1]
+                return cached[1], _KEEP
             v = NAME
         except RecursionError:
             v = CIRC
         except Exception:  # never let one bad formula take the app down
             v = VALUE
         sheet.stale.discard((r, c))
-        return v
+        return v, rows
 
     def _run(self, dirty: set):
         if len(dirty) > 20_000:
@@ -576,10 +833,39 @@ class Workbook:
             if key in self.dirty:
                 self._eval(key)
         self.dirty.clear()
+        self._settle_spills()
+
+    def _settle_spills(self) -> set:
+        """Recalculate formulas that read cells whose spilled values changed (they may have been
+        evaluated before the spill happened, or not been dirty at all). Returns their keys."""
+        done: set = set()
+        for _ in range(20):
+            if not self._spill_changed:
+                break
+            changed, self._spill_changed = self._spill_changed, []
+            more: set = set()
+            for sheet, r1, c1, r2, c2, anchor in changed:
+                if sheet not in self.sheets:
+                    continue
+                more |= self.graph.dependents_rect(sheet, r1, c1, r2, c2)
+                more.update((sheet, ar, ac) for ar, ac in sheet.spill.blocked_in(r1, c1, r2, c2)
+                            if (ar, ac) != anchor)
+            if not more:
+                continue
+            more |= self.graph.all_dependents(more)
+            done |= more
+            self.dirty |= more
+            for key in self.graph.topo_order(set(more)):
+                if key in self.dirty:
+                    self._eval(key)
+            self.dirty.clear()
+        self._spill_changed = []
+        return done
 
     def recalc(self, changed) -> set:
         """Recalculate everything that depends on the changed cells (and volatile formulas)."""
         changed = set(changed)
+        changed |= self._spill_watchers(changed)
         dirty = self.graph.all_dependents(changed)
         for key in changed:
             if (key[1], key[2]) in key[0].formulas:
@@ -590,6 +876,8 @@ class Workbook:
             dirty |= self.graph.all_dependents(vol)
         if dirty:
             self._run(dirty)
+        elif self._spill_changed:
+            dirty = self._settle_spills()
         return dirty
 
     def recalc_all(self):
@@ -626,6 +914,7 @@ class Workbook:
             return
         if cell is None:
             cell = ws.cell(row=r, column=c)
+            self.legacy.discard(id(cell))  # a new object may reuse a forgotten cell's id
         cell._value = value
         cell.data_type = data_type
         cell._style = copy(style)
@@ -735,6 +1024,8 @@ class Workbook:
         self._touch(sheet, r, c)
         self._unregister(sheet, r, c)
         cell = existing if existing is not None else sheet.ws.cell(row=r, column=c)
+        if self.legacy:
+            self.legacy.discard(id(cell))
         cell.value = value
         if data_type is not None:
             cell.data_type = data_type
@@ -759,6 +1050,10 @@ class Workbook:
 
     def set_input(self, sheet: Sheet, r: int, c: int, text: str):
         """Apply text typed by the user. Raises FormulaSyntaxError for bad formulas."""
+        part_of = self.array_part(sheet, r, c)
+        if part_of is not None:
+            raise ValueError("You can't change part of an array formula; edit the formula in "
+                             f"{col_letter(part_of[1])}{part_of[0]}")
         p = parse_input(text, self.epoch1904)
         with self.transaction("Edit cell", (sheet.name, Rect(r, c, r, c))):
             self._tx_expand = True
@@ -915,6 +1210,23 @@ class Workbook:
         for (r, c), cell in sheet.ws._cells.items():
             if rect.contains(r, c) and not isinstance(cell, MergedCell):
                 cells[(r - rect.r1, c - rect.c1)] = (cell._value, cell.data_type, copy(cell._style))
+        if sheet.spill.anchors:
+            # Spilled values are pasted as values, except where the formula itself is copied too
+            # (then it spills again at the destination): those are marked "spill" and only pasted
+            # by Paste Values.
+            for r, c, anchor in sheet.spill.cells_in(rect.r1, rect.c1, rect.r2, rect.c2):
+                v = sheet.spill.value(anchor, r, c)
+                if v is None:
+                    continue
+                cell = sheet.ws._cells.get((r, c))
+                style = copy(cell._style) if cell is not None else StyleArray()
+                if rect.contains(*anchor):
+                    dtype = "spill"
+                elif isinstance(v, ExcelError):
+                    v, dtype = v.code, "e"
+                else:
+                    dtype = "s" if isinstance(v, str) else None
+                cells[(r - rect.r1, c - rect.c1)] = (v, dtype, style)
         return {"sheet": sheet, "rect": rect, "cells": cells}
 
     def paste(self, clip: dict, sheet: Sheet, r0: int, c0: int, cut: bool = False,
@@ -946,6 +1258,15 @@ class Workbook:
                         for dc in range(w):
                             r, c = br + dr, bc + dc
                             data = clip["cells"].get((dr, dc))
+                            if data is not None and data[1] == "spill":
+                                if values_only:
+                                    v = data[0]
+                                    if isinstance(v, ExcelError):
+                                        self.set_raw(sheet, r, c, v.code, "e")
+                                    else:
+                                        self.set_raw(sheet, r, c, v, "s" if isinstance(v, str) else None)
+                                    continue
+                                data = None
                             if data is None:
                                 if sheet.ws._cells.get((r, c)) is not None:
                                     self.set_raw(sheet, r, c, None)
@@ -957,8 +1278,6 @@ class Workbook:
                                 text = _formula_text(value)
                                 if values_only:
                                     v = self.get_value(src_sheet, src.r1 + dr, src.c1 + dc)
-                                    from ..formula.errors import ExcelError
-
                                     if isinstance(v, ExcelError):
                                         self.set_raw(sheet, r, c, v.code, "e")
                                     else:
