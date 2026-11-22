@@ -36,6 +36,16 @@ def test_aggregates_ignore_text_in_ranges(ev):
     assert ev("=COUNTBLANK(A1:A6)") == 1
 
 
+def test_yearfrac_actual_actual(ev):
+    # Within a year: 366 days if a 29 February falls in the period, else 365.
+    assert ev("=YEARFRAC(DATE(2023,12,1),DATE(2024,3,1),1)") == pytest.approx(91 / 366)
+    assert ev("=YEARFRAC(DATE(2023,3,1),DATE(2024,3,1),1)") == 1
+    assert ev("=YEARFRAC(DATE(2024,3,1),DATE(2025,2,1),1)") == pytest.approx(337 / 365)
+    assert ev("=YEARFRAC(DATE(2024,1,1),DATE(2024,2,1),1)") == pytest.approx(31 / 366)
+    # Longer: the average length of the years involved
+    assert ev("=YEARFRAC(DATE(2023,1,1),DATE(2024,6,1),1)") == pytest.approx(517 / 365.5)
+
+
 def test_huge_number_text(ev):
     assert ev('=VALUE("1e400")') == VALUE
     assert ev('="1e400"+1') == VALUE

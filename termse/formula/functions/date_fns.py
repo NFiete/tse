@@ -289,8 +289,14 @@ def YEARFRAC(start, end, basis=0):
         return ((e.year - s.year) * 360 + (e.month - s.month) * 30 + (d2 - d1)) / 360
     days = (e - s).days
     if b == 1:
-        if s.year == e.year:
-            ylen = 366 if calendar.isleap(s.year) else 365
+        if days == 0:
+            return 0
+        within_year = s.year == e.year or (e.year == s.year + 1 and (s.month, s.day) >= (e.month, e.day))
+        if within_year:
+            # 366 if a 29 February falls in the period, else 365
+            leap_day = (calendar.isleap(s.year) and s < type(s)(s.year, 3, 1)) or (
+                calendar.isleap(e.year) and (e >= type(e)(e.year, 3, 1) or (e.month, e.day) == (2, 29)))
+            ylen = 366 if (s.year == e.year and calendar.isleap(s.year)) or leap_day else 365
         else:
             yrs = range(s.year, e.year + 1)
             ylen = sum(366 if calendar.isleap(y) else 365 for y in yrs) / len(yrs)
