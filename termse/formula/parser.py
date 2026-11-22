@@ -960,6 +960,9 @@ XLFN_FUNCS = {
     "MODE.MULT", "NEGBINOM.DIST", "NORM.DIST", "NORM.INV", "NORM.S.DIST", "NORM.S.INV", "PERCENTRANK.EXC",
     "PERCENTRANK.INC", "PERMUTATIONA", "PHI", "POISSON.DIST", "SKEW.P", "T.DIST", "T.DIST.2T", "T.DIST.RT",
     "T.INV", "T.INV.2T", "T.TEST", "WEIBULL.DIST", "Z.TEST",
+    # engineering functions added in Excel 2010-2013
+    "BITAND", "BITOR", "BITXOR", "BITLSHIFT", "BITRSHIFT", "ERF.PRECISE", "ERFC.PRECISE", "IMCOSH", "IMCOT",
+    "IMCSC", "IMCSCH", "IMSEC", "IMSECH", "IMSINH", "IMTAN",
 }
 _XLWS_FUNCS = {"FILTER", "SORT"}
 # Functions whose arguments may be functions (eta-reduced LAMBDAs such as SUM in

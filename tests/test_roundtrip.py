@@ -82,7 +82,7 @@ def test_cached_values_used_on_load(sample_path, tmp_path):
 def test_unsupported_function_keeps_cached_value(tmp_path):
     p = str(tmp_path / "u.xlsx")
     wb = openpyxl.Workbook()
-    wb.active["A1"] = "=BESSELJ(1.9,2)"
+    wb.active["A1"] = '=WEBSERVICE("https://example.com/n")'
     wb.save(p)
     # inject a cached value as Excel would have written it
     import shutil
@@ -94,13 +94,13 @@ def test_unsupported_function_keeps_cached_value(tmp_path):
             data = src.read(item.filename)
             if item.filename == "xl/worksheets/sheet1.xml":
                 assert b"<v></v>" in data or b"<v />" in data
-                data = data.replace(b"<v></v>", b"<v>0.329925829</v>").replace(b"<v />", b"<v>0.329925829</v>")
+                data = data.replace(b"<v></v>", b"<v>42</v>").replace(b"<v />", b"<v>42</v>")
             out.writestr(item, data)
     src.close()
     shutil.move(p2, p)
     book = xlsx.load(p)
     s = book.sheets[0]
-    assert book.get_value(s, 1, 1) == 0.329925829
+    assert book.get_value(s, 1, 1) == 42
     assert (1, 1) in s.stale
 
 

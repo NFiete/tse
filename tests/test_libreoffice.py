@@ -103,6 +103,21 @@ FORMULAS = [
     '=DSUM(A1:E7,"Qty",L1:L2)', '=DAVERAGE(A1:E7,"Qty",M1:M3)',
     # LET (LibreOffice doesn't have LAMBDA)
     "=LET(x,B2,y,x*2,x+y)", "=LET(r,B2:B7,SUM(r)/ROWS(r))", "=LET(x,1/0,5)",
+    # engineering (LibreOffice doesn't read IMTAN, IMSEC... with the _xlfn. prefix Excel uses)
+    "=BIN2DEC(1111111111)", "=BIN2HEX(11111011,4)", "=BIN2OCT(1100100)", "=DEC2BIN(-100)", "=DEC2BIN(9.9,6)",
+    "=DEC2HEX(-54)", "=DEC2OCT(B3,4)", '=HEX2BIN("FFFFFFFE00")', '=HEX2DEC("3DA408B9")', '=HEX2OCT("FFFFFFFF00")',
+    "=OCT2BIN(7777777000)", "=OCT2DEC(7777777533)", "=OCT2HEX(100,4)", "=DEC2BIN(512)", '=HEX2DEC("G")',
+    "=BITAND(13,25)", "=BITOR(23,10)", "=BITXOR(B3,B4)", "=BITLSHIFT(4,-2)", "=BITRSHIFT(5,-2)", "=BITLSHIFT(1,48)",
+    "=DELTA(B2,3)", "=GESTEP(-4,-5)", "=ERF(0.745)", "=ERF(0.2,1.5)", "=ERF.PRECISE(-0.5)", "=ERFC(1)",
+    "=ERFC.PRECISE(2)", '=CONVERT(68,"F","C")', '=CONVERT(B3,"km","m")', '=CONVERT(1,"Gibyte","Mibyte")',
+    '=CONVERT(1,"mm2","cm2")', '=CONVERT(2,"mL","l")', '=CONVERT(500,"Rank","Reau")', '=CONVERT(1,"kft","ft")',
+    '=CONVERT(6,"gal","l")', '=CONVERT(1,"m","sec")', "=BESSELJ(1.9,2)", "=BESSELJ(-3,1)", "=BESSELJ(31,40)",
+    "=BESSELY(2.5,1)", "=BESSELY(0.5,3)", "=BESSELY(31,2)", "=BESSELI(1.5,1)", "=BESSELI(20,3)",
+    "=BESSELK(1.5,1)", "=BESSELK(0.01,0)", "=BESSELK(50,3)", "=COMPLEX(3,-4)", '=COMPLEX(0,-1,"j")',
+    '=IMABS("5+12i")', '=IMAGINARY("0-j")', '=IMREAL("1e3+2e-1i")', '=IMARGUMENT("3+4i")',
+    '=IMCONJUGATE("3+4i")', '=IMCOS("1+i")', '=IMSIN("4+3i")', '=IMEXP("1+i")', '=IMLN("3+4i")',
+    '=IMLOG10("3+4i")', '=IMLOG2("3+4i")', '=IMPOWER("2+3i",3)', '=IMSQRT("1+i")', '=IMDIV("-238+240i","10+24i")',
+    '=IMSUB("13+4i","5+3i")', '=IMSUM("3+4i","5-3i","i")', '=IMPRODUCT("3+4i","5-3i")', '=IMREAL("3+4")',
 ]
 
 # Criteria for the database functions, in J1:M3 (text criteria use ="=x" because plain text is a
@@ -127,6 +142,12 @@ EXCEL_DIFFERS = {
     "=DROP(A2:C7,6)": "#CALC!",            # empty array; LibreOffice: #VALUE!
     "=TAKE(A2:C7,0)": "#CALC!",            # empty array; LibreOffice: #N/A
     "=WRAPROWS(B2:B7,0)": "#NUM!",         # wrap_count < 1; LibreOffice: #VALUE!
+    # Microsoft documents #NUM! for invalid numbers and #N/A for unknown or mismatched units;
+    # LibreOffice gives #VALUE!
+    "=DEC2BIN(512)": "#NUM!", '=HEX2DEC("G")': "#NUM!", '=IMREAL("3+4")': "#NUM!",
+    '=CONVERT(1,"kft","ft")': "#N/A", '=CONVERT(1,"m","sec")': "#N/A",
+    # Microsoft's example; Excel's BESSELJ is approximate, LibreOffice's exact (0.329925727692387)
+    "=BESSELJ(1.9,2)": 0.3299258286697852,
 }
 
 
