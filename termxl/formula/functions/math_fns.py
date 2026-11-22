@@ -313,6 +313,14 @@ def SUM(ctx, *args):
     return _sum(numbers(ctx, args))
 
 
+@fn("PERCENTOF", kind="raw", min_args=2, max_args=2)
+def PERCENTOF(ctx, subset, total):
+    whole = _sum(numbers(ctx, [total]))
+    if whole == 0:
+        raise XLError(DIV0)
+    return _sum(numbers(ctx, [subset])) / whole
+
+
 @fn("PRODUCT", kind="raw", min_args=1)
 def PRODUCT(ctx, *args):
     vals = numbers(ctx, args)

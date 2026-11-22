@@ -738,6 +738,9 @@ XLFN_FUNCS = {
     "PERCENTILE.INC", "PERCENTILE.EXC", "QUARTILE.INC", "QUARTILE.EXC", "SEQUENCE", "UNIQUE",
     "SORT", "SORTBY", "FILTER", "LET", "LAMBDA", "TEXTBEFORE", "TEXTAFTER", "TEXTSPLIT",
     "CEILING.PRECISE", "FLOOR.PRECISE", "BINOM.DIST",
+    # dynamic-array and lookup functions
+    "TAKE", "DROP", "VSTACK", "HSTACK", "TOCOL", "TOROW", "CHOOSEROWS", "CHOOSECOLS", "EXPAND", "WRAPROWS",
+    "WRAPCOLS", "FORMULATEXT", "GROUPBY", "PIVOTBY", "TRIMRANGE", "PERCENTOF",
     # statistical functions added in Excel 2010-2016
     "BETA.DIST", "BETA.INV", "BINOM.DIST.RANGE", "BINOM.INV", "CHISQ.DIST", "CHISQ.DIST.RT", "CHISQ.INV",
     "CHISQ.INV.RT", "CHISQ.TEST", "CONFIDENCE.NORM", "CONFIDENCE.T", "COVARIANCE.P", "COVARIANCE.S",
@@ -747,7 +750,10 @@ XLFN_FUNCS = {
     "PERCENTRANK.INC", "PERMUTATIONA", "PHI", "POISSON.DIST", "SKEW.P", "T.DIST", "T.DIST.2T", "T.DIST.RT",
     "T.INV", "T.INV.2T", "T.TEST", "WEIBULL.DIST", "Z.TEST",
 }
-_XLWS_FUNCS = {"FILTER", "SORT", "SORTBY"}
+_XLWS_FUNCS = {"FILTER", "SORT"}
+# Functions whose arguments may be functions (eta-reduced LAMBDAs such as SUM in
+# GROUPBY(A1:A9,B1:B9,SUM)); files spell those arguments _xleta.SUM.
+ETA_ARG_FUNCS = {"GROUPBY", "PIVOTBY", "MAP", "REDUCE", "SCAN", "BYROW", "BYCOL", "MAKEARRAY"}
 
 
 def normalize(formula: str) -> str:
@@ -768,22 +774,42 @@ def normalize(formula: str) -> str:
 
 
 def to_storage(formula: str) -> str:
-    """Add _xlfn. prefixes required by the xlsx format for newer functions, and spell
-    [@Col] table references as [[#This Row],[Col]]."""
+    """Add _xlfn. prefixes required by the xlsx format for newer functions, _xleta. to functions
+    passed as arguments, and spell [@Col] table references as [[#This Row],[Col]]."""
+    stack: list = []  # enclosing function names (None for plain parentheses and array constants)
 
     def fn(t: Token):
         if t.kind == SREFT:
             return sref_text(t.value, storage=True) if "thisrow" in t.value.items else None
+        if t.kind in (LP, LBRACE):
+            stack.append(None)
+            return None
+        if t.kind in (RP, RBRACE):
+            if stack:
+                stack.pop()
+            return None
+        if t.kind == NAMET:
+            if any(f in ETA_ARG_FUNCS for f in stack) and "!" not in t.text and _is_function_name(t.text):
+                return "_xleta." + canonical_func_name(t.text)
+            return None
         if t.kind != FUNC:
             return None
         name = t.text[:-1]
         canon = canonical_func_name(name)
+        stack.append(canon)
         if canon in XLFN_FUNCS and canon == name.upper():
             prefix = "_xlfn._xlws." if canon in _XLWS_FUNCS else "_xlfn."
             return prefix + name.upper() + "("
         return None
 
     return rewrite_tokens(formula, fn)
+
+
+def _is_function_name(name: str) -> bool:
+    from .functions import registered
+
+    up = name.upper()
+    return not up.startswith(("_XLETA.", "_XLFN.", "_XLWS.")) and up in registered()
 
 
 def to_display(formula: str) -> str:
@@ -795,6 +821,8 @@ def to_display(formula: str) -> str:
     def fn(t: Token):
         if t.kind == SREFT:
             return sref_text(t.value) if "thisrow" in t.value.items else None
+        if t.kind == NAMET:
+            return t.text[7:] if t.text[:7].upper() == "_XLETA." else None
         if t.kind != FUNC:
             return None
         canon = canonical_func_name(t.text[:-1])

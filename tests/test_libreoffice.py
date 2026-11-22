@@ -83,6 +83,17 @@ FORMULAS = [
     "=INDEX(LINEST(C2:C7,B2:B7,TRUE,TRUE),2,1)", "=INDEX(LINEST(C2:C7,B2:B7,TRUE,TRUE),4,1)",
     "=INDEX(LINEST(D2:D7,B2:C7,FALSE,TRUE),5,2)", "=INDEX(LOGEST(C2:C7,B2:B7,TRUE,TRUE),1,1)",
     "=INDEX(TREND(C2:C7,B2:B7,{15;20}),2)", "=INDEX(GROWTH(C2:C7,B2:B7,{15;20}),1)",
+    # dynamic arrays and lookup
+    "=INDEX(SORTBY(A2:A7,B2:B7,-1),2)", "=INDEX(SORTBY(A2:C7,E2:E7,1,C2:C7,-1),4,1)", "=INDEX(SORTBY(A1:E1,{5,4,3,2,1}),1,2)",
+    "=INDEX(TAKE(A2:C7,-2,2),1,1)", "=ROWS(TAKE(A2:C7,10))", "=INDEX(TAKE(A2:C7,,-1),3)", "=INDEX(DROP(A2:C7,2,1),1,2)",
+    "=ROWS(DROP(A2:C7,-4))", "=DROP(A2:C7,6)", "=TAKE(A2:C7,0)", "=INDEX(VSTACK(A2:B3,C2:C3),3,2)",
+    "=INDEX(VSTACK(A2:B3,C2:C3),4,1)", "=INDEX(HSTACK(A2:A4,B2:C3),3,3)", "=COLUMNS(HSTACK(A2:A4,B2:C3,1))",
+    "=INDEX(TOCOL(A2:C3),4)", "=INDEX(TOCOL(A2:C3,0,TRUE),2)", "=COUNTA(TOCOL(A1:G8,1))", "=INDEX(TOROW(B2:C4,,TRUE),1,4)",
+    "=INDEX(CHOOSEROWS(A2:C7,-1,2),1,1)", "=INDEX(CHOOSECOLS(A2:C7,3,-3),2,2)", "=CHOOSEROWS(A2:C7,7)", "=CHOOSECOLS(A2:C7,0)",
+    '=INDEX(EXPAND(B2:C3,3,3,"-"),3,3)', "=INDEX(EXPAND(B2:C3,3),3,1)", "=EXPAND(B2:C3,1)", "=INDEX(WRAPROWS(B2:B7,4),2,2)",
+    "=INDEX(WRAPROWS(B2:B7,4),2,3)", '=INDEX(WRAPCOLS(A2:A7,4,"x"),3,2)', "=WRAPROWS(A2:C7,2)", "=WRAPROWS(B2:B7,0)",
+    "=SUM(WRAPCOLS(C2:C7,5,0))", "=FORMULATEXT(D3)", "=FORMULATEXT(A3)", '=HYPERLINK("https://example.com","Example")',
+    '=HYPERLINK("https://example.com")', "=AREAS(B2:D4)",
 ]
 
 # Where LibreOffice and Excel disagree, we follow Excel (Microsoft 365).
@@ -92,6 +103,9 @@ EXCEL_DIFFERS = {
     "=DOLLAR(-1234.5)": "($1,234.50)",     # en-US currency format; LibreOffice: -$1,234.50
     "=PERCENTRANK(C2:C7,1)": 0.288,        # Excel truncates to 3 digits; LibreOffice rounds: 0.289
     "=PERCENTRANK.EXC(B2:B7,3,4)": 0.4285,  # likewise; LibreOffice: 0.4286
+    "=DROP(A2:C7,6)": "#CALC!",            # empty array; LibreOffice: #VALUE!
+    "=TAKE(A2:C7,0)": "#CALC!",            # empty array; LibreOffice: #N/A
+    "=WRAPROWS(B2:B7,0)": "#NUM!",         # wrap_count < 1; LibreOffice: #VALUE!
 }
 
 

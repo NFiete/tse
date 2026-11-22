@@ -7,7 +7,7 @@ from . import functions  # noqa: F401  (registers all functions)
 from .errors import DIV0, NA, NAME, NUM, REF, VALUE, ExcelError, Unsupported, XLError
 from .parser import ArrayNode, Binary, Const, Func, Missing, NameNode, Node, RefNode, StructRefNode, Unary
 from .registry import FUNCTIONS, to_array
-from .values import MISSING, Array, RefValue, compare, fix_number, to_number, to_text
+from .values import MISSING, Array, FuncValue, RefValue, compare, fix_number, to_number, to_text
 
 
 class Ctx:
@@ -184,6 +184,10 @@ def evaluate(node: Node, ctx: Ctx):
     if t is NameNode:
         target = ctx.engine.resolve_name(node.name, ctx.sheet, node.sheet)
         if target is None:
+            if node.sheet is None:
+                fv = function_value(node.name)
+                if fv is not None:
+                    return fv
             return NAME
         ctx.depth += 1
         try:
@@ -199,6 +203,33 @@ def evaluate(node: Node, ctx: Ctx):
     raise Unsupported(f"Cannot evaluate {node!r}")
 
 
+def function_value(name: str) -> FuncValue | None:
+    """The function a bare name such as SUM or _xleta.SUM refers to, if any."""
+    up = name.upper()
+    if up.startswith("_XLETA."):
+        up = up[7:]
+    for p in ("_XLFN._XLWS.", "_XLFN.", "_XLWS."):
+        if up.startswith(p):
+            up = up[len(p):]
+            break
+    spec = FUNCTIONS.get(up)
+    return FuncValue(up, spec) if spec is not None else None
+
+
+def call_function(ctx: Ctx, fv: FuncValue, args: list):
+    """Call a function value with already-evaluated arguments; returns a value (errors as values)."""
+    spec = fv.spec
+    n = len(args)
+    if n < spec.min_args or (spec.max_args is not None and n > spec.max_args):
+        return VALUE
+    if spec.kind == "lazy":
+        try:
+            return spec.impl(ctx, *[(lambda a=a: a) for a in args])
+        except XLError as e:
+            return e.err
+    return _apply(spec, ctx, args)
+
+
 def _call(node: Func, ctx: Ctx):
     spec = FUNCTIONS.get(node.name)
     if spec is None:
@@ -212,7 +243,10 @@ def _call(node: Func, ctx: Ctx):
             return spec.impl(ctx, *thunks)
         except XLError as e:
             return e.err
-    args = [evaluate(a, ctx) for a in node.args]
+    return _apply(spec, ctx, [evaluate(a, ctx) for a in node.args])
+
+
+def _apply(spec, ctx: Ctx, args: list):
     if spec.kind == "raw":
         try:
             r = spec.impl(ctx, *args)
@@ -243,6 +277,8 @@ def finalize(ctx: Ctx, v):
         v = v.rows[0][0] if v.rows and v.rows[0] else NA
     if v is None or v is MISSING:
         return 0
+    if isinstance(v, FuncValue):
+        return NAME
     if type(v) is float and (math.isnan(v) or math.isinf(v)):
         return NUM
     return v

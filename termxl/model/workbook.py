@@ -295,6 +295,11 @@ class Workbook:
     def is_formula(self, sheet: Sheet, r: int, c: int) -> bool:
         return (r, c) in sheet.formulas
 
+    def formula_text(self, sheet: Sheet, r: int, c: int) -> str | None:
+        """A cell's formula as the user sees it (with '='), or None if it holds no formula."""
+        f = sheet.formulas.get((r, c))
+        return None if f is None else f.text
+
     def resolve_name(self, name: str, sheet: Sheet, explicit_sheet: str | None = None, tables: bool = True):
         low = name.lower()
         if explicit_sheet is not None:

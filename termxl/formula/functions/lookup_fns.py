@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from ...model.refs import MAX_COL, MAX_ROW, col_letter, quote_sheet
-from ..errors import CALC, NA, REF, VALUE, ExcelError, XLError
+from ..errors import CALC, NA, NUM, REF, VALUE, ExcelError, XLError
 from ..registry import fn, lookup_equal, scalar_arg, to_array, to_scalar, wild_matcher
 from ..values import MISSING, Array, RefValue, compare, to_bool, to_int, to_number, to_text, type_rank
 
@@ -224,16 +224,6 @@ def INDEX(ctx, ref, row, col=MISSING, area=MISSING):
     return ref.rows[r - 1][c - 1]
 
 
-@fn("CHOOSECOLS", kind="raw", min_args=2)
-def CHOOSECOLS(ctx, arr, *cols):
-    a = to_array(ctx, arr)
-    idx = [to_int(scalar_arg(ctx, c)) for c in cols]
-    out = []
-    for row in a.rows:
-        out.append([row[i - 1] if i > 0 else row[i] for i in idx])
-    return Array(out)
-
-
 @fn("ROW", kind="raw", max_args=1)
 def ROW(ctx, ref=MISSING):
     if ref is MISSING:
@@ -428,3 +418,332 @@ def SEQUENCE(ctx, rows, cols=MISSING, start=MISSING, step=MISSING):
     if r < 1 or c < 1:
         raise XLError(CALC)
     return Array([[s + (i * c + j) * st for j in range(c)] for i in range(r)])
+
+
+# ------------------------------------------------------------------ array shaping
+
+
+def full_array(ctx, v) -> Array:
+    """Like to_array, but a reference keeps its full size: blank rows and columns beyond the
+    sheet's used area are included (as shared blank rows, so whole columns stay cheap)."""
+    a = to_array(ctx, v)
+    if not isinstance(v, RefValue):
+        return a
+    rows = a.rows
+    if a.ncols < v.ncols:
+        extra = [None] * (v.ncols - a.ncols)
+        rows = [r + extra for r in rows]
+    if len(rows) < v.nrows:
+        rows = rows + [[None] * v.ncols] * (v.nrows - len(rows))
+    return Array(rows) if rows is not a.rows else a
+
+
+def _opt_int(ctx, v):
+    return None if v is MISSING else to_int(scalar_arg(ctx, v))
+
+
+def _index_list(ctx, args) -> list[int]:
+    """Row/column numbers given as scalars or arrays, e.g. CHOOSEROWS(A1:C9,1,{3,4})."""
+    out = []
+    for a in args:
+        if isinstance(a, (RefValue, Array)):
+            for v in to_array(ctx, a).flat():
+                if isinstance(v, ExcelError):
+                    raise XLError(v)
+                out.append(to_int(v))
+        else:
+            out.append(to_int(scalar_arg(ctx, a)))
+    return out
+
+
+def _resolve_indexes(idx: list[int], size: int) -> list[int]:
+    out = []
+    for i in idx:
+        if 0 < i <= size:
+            out.append(i - 1)
+        elif 0 < -i <= size:
+            out.append(size + i)
+        else:
+            raise XLError(VALUE)
+    return out
+
+
+@fn("CHOOSEROWS", kind="raw", min_args=2)
+def CHOOSEROWS(ctx, arr, *nums):
+    a = full_array(ctx, arr)
+    return Array([list(a.rows[i]) for i in _resolve_indexes(_index_list(ctx, nums), a.nrows)])
+
+
+@fn("CHOOSECOLS", kind="raw", min_args=2)
+def CHOOSECOLS(ctx, arr, *nums):
+    a = full_array(ctx, arr)
+    idx = _resolve_indexes(_index_list(ctx, nums), a.ncols)
+    return Array([[row[j] for j in idx] for row in a.rows])
+
+
+def _take_span(n, size):
+    if n is None:
+        return 0, size
+    if n == 0:
+        raise XLError(CALC)
+    return (0, min(n, size)) if n > 0 else (max(size + n, 0), size)
+
+
+def _drop_span(n, size):
+    if not n:
+        return 0, size
+    if abs(n) >= size:
+        raise XLError(CALC)
+    return (n, size) if n > 0 else (0, size + n)
+
+
+@fn("TAKE", kind="raw", min_args=2, max_args=3)
+def TAKE(ctx, arr, rows, cols=MISSING):
+    a = full_array(ctx, arr)
+    r1, r2 = _take_span(_opt_int(ctx, rows), a.nrows)
+    c1, c2 = _take_span(_opt_int(ctx, cols), a.ncols)
+    return _slice(a, r1, r2, c1, c2)
+
+
+def _slice(a: Array, r1, r2, c1, c2) -> Array:
+    if c1 == 0 and c2 == a.ncols:
+        return Array(a.rows[r1:r2])  # rows are never mutated, so they can be shared
+    return Array([row[c1:c2] for row in a.rows[r1:r2]])
+
+
+@fn("DROP", kind="raw", min_args=2, max_args=3)
+def DROP(ctx, arr, rows, cols=MISSING):
+    a = full_array(ctx, arr)
+    r1, r2 = _drop_span(_opt_int(ctx, rows), a.nrows)
+    c1, c2 = _drop_span(_opt_int(ctx, cols), a.ncols)
+    return _slice(a, r1, r2, c1, c2)
+
+
+@fn("EXPAND", kind="raw", min_args=2, max_args=4)
+def EXPAND(ctx, arr, rows, cols=MISSING, pad=MISSING):
+    a = full_array(ctx, arr)
+    nr = _opt_int(ctx, rows)
+    nc = _opt_int(ctx, cols)
+    nr = a.nrows if nr is None else nr
+    nc = a.ncols if nc is None else nc
+    if nr < a.nrows or nc < a.ncols:
+        raise XLError(VALUE)
+    p = NA if pad is MISSING else to_scalar(ctx, pad)
+    out = [list(row) + [p] * (nc - a.ncols) for row in a.rows]
+    out += [[p] * nc for _ in range(nr - a.nrows)]
+    return Array(out)
+
+
+def _stack_parts(ctx, arrays):
+    return [full_array(ctx, a) for a in arrays]
+
+
+@fn("VSTACK", kind="raw", min_args=1)
+def VSTACK(ctx, *arrays):
+    parts = _stack_parts(ctx, arrays)
+    width = max(p.ncols for p in parts)
+    out = []
+    for p in parts:
+        if p.ncols == width:
+            out.extend(p.rows)
+        else:
+            fill = [NA] * (width - p.ncols)
+            out.extend(row + fill for row in p.rows)
+    return Array(out)
+
+
+@fn("HSTACK", kind="raw", min_args=1)
+def HSTACK(ctx, *arrays):
+    parts = _stack_parts(ctx, arrays)
+    height = max(p.nrows for p in parts)
+    out = [[] for _ in range(height)]
+    for p in parts:
+        for i in range(height):
+            out[i].extend(p.rows[i] if i < p.nrows else [NA] * p.ncols)
+    return Array(out)
+
+
+def _flat_ignoring(ctx, arr, ignore, by_col) -> list:
+    a = full_array(ctx, arr)
+    ig = 0 if ignore is MISSING else to_int(scalar_arg(ctx, ignore))
+    if ig not in (0, 1, 2, 3):
+        raise XLError(VALUE)
+    col = False if by_col is MISSING else to_bool(scalar_arg(ctx, by_col))
+    vals = (v for c in zip(*a.rows) for v in c) if col else a.flat()
+    out = [v for v in vals
+           if not ((ig & 1 and v is None) or (ig & 2 and isinstance(v, ExcelError)))]
+    if not out:
+        raise XLError(CALC)
+    return out
+
+
+@fn("TOCOL", kind="raw", min_args=1, max_args=3)
+def TOCOL(ctx, arr, ignore=MISSING, by_col=MISSING):
+    return Array([[v] for v in _flat_ignoring(ctx, arr, ignore, by_col)])
+
+
+@fn("TOROW", kind="raw", min_args=1, max_args=3)
+def TOROW(ctx, arr, ignore=MISSING, by_col=MISSING):
+    return Array([_flat_ignoring(ctx, arr, ignore, by_col)])
+
+
+def _wrap(ctx, vec, count, pad) -> list[list]:
+    a = full_array(ctx, vec)
+    if a.nrows != 1 and a.ncols != 1:
+        raise XLError(VALUE)
+    n = to_int(scalar_arg(ctx, count))
+    if n < 1:
+        raise XLError(NUM)
+    vals = list(a.flat())
+    p = NA if pad is MISSING else to_scalar(ctx, pad)
+    chunks = [vals[i:i + n] for i in range(0, len(vals), n)]
+    chunks[-1] += [p] * (n - len(chunks[-1]))
+    return chunks
+
+
+@fn("WRAPROWS", kind="raw", min_args=2, max_args=3)
+def WRAPROWS(ctx, vec, count, pad=MISSING):
+    return Array(_wrap(ctx, vec, count, pad))
+
+
+@fn("WRAPCOLS", kind="raw", min_args=2, max_args=3)
+def WRAPCOLS(ctx, vec, count, pad=MISSING):
+    return Array([list(r) for r in zip(*_wrap(ctx, vec, count, pad))])
+
+
+def sort_cmp(a, b, desc=False) -> int:
+    """Order for SORT/SORTBY keys: numbers, text, logicals, errors; blanks always last."""
+    if a is None or b is None:
+        return (a is None) - (b is None)
+    ea, eb = isinstance(a, ExcelError), isinstance(b, ExcelError)
+    if ea or eb:
+        c = ea - eb
+    else:
+        c = compare(a, b)
+    return -c if desc else c
+
+
+@fn("SORTBY", kind="raw", min_args=2)
+def SORTBY(ctx, arr, *pairs):
+    import functools
+
+    a = full_array(ctx, arr)
+    keys, by_cols = [], set()
+    for i in range(0, len(pairs), 2):
+        raw = pairs[i]
+        by = to_array(ctx, raw)  # clipped to the used area: positions past it are blank
+        nr, nc = (raw.nrows, raw.ncols) if isinstance(raw, RefValue) else (by.nrows, by.ncols)
+        order = pairs[i + 1] if i + 1 < len(pairs) else MISSING
+        o = 1 if order is MISSING else to_number(scalar_arg(ctx, order))
+        if o not in (1, -1):
+            raise XLError(VALUE)
+        if nc == 1 and nr == a.nrows:
+            by_cols.add(False)
+            keys.append(([r[0] for r in by.rows], o < 0))
+        elif nr == 1 and nc == a.ncols:
+            by_cols.add(True)
+            keys.append((list(by.rows[0]), o < 0))
+        else:
+            raise XLError(VALUE)
+    single = a.nrows == 1 and a.ncols == 1
+    if len(by_cols) > 1 and not single:
+        raise XLError(VALUE)
+    by_col = False if single else by_cols.pop()
+    n = a.ncols if by_col else a.nrows
+    used = min(n, max(len(vals) for vals, _ in keys))
+    for vals, _ in keys:
+        vals.extend([None] * (used - len(vals)))
+
+    def cmp(i, j):
+        for vals, desc in keys:
+            c = sort_cmp(vals[i], vals[j], desc)
+            if c:
+                return c
+        return 0
+
+    # Positions whose keys are all blank go last in their original order; not sorting them
+    # keeps whole-column references (mostly blank) fast.
+    blank = [i for i in range(used) if all(vals[i] is None for vals, _ in keys)]
+    if blank:
+        bset = set(blank)
+        rest = [i for i in range(used) if i not in bset]
+    else:
+        rest = range(used)
+    order = sorted(rest, key=functools.cmp_to_key(cmp)) + blank
+    if by_col:
+        return Array([[row[j] for j in order] + row[used:] for row in a.rows])
+    return Array([a.rows[i] for i in order] + a.rows[used:])
+
+
+# ------------------------------------------------------------------ reference information
+
+
+@fn("FORMULATEXT", kind="raw", min_args=1, max_args=1)
+def FORMULATEXT(ctx, ref):
+    if isinstance(ref, ExcelError):
+        raise XLError(ref)
+    if not isinstance(ref, RefValue):
+        raise XLError(VALUE)
+    text = ctx.engine.formula_text(ref.sheet, ref.r1, ref.c1)
+    if text is None:
+        raise XLError(NA)
+    return text
+
+
+@fn("HYPERLINK", kind="raw", min_args=1, max_args=2)
+def HYPERLINK(ctx, link, name=MISSING):
+    v = to_scalar(ctx, link if name is MISSING else name)
+    return None if v is MISSING else v
+
+
+@fn("AREAS", kind="raw", min_args=1, max_args=1)
+def AREAS(ctx, ref):
+    if isinstance(ref, ExcelError):
+        raise XLError(ref)
+    if not isinstance(ref, RefValue):
+        raise XLError(VALUE)
+    return 1
+
+
+def _trim_span(flags: list[bool], mode: int):
+    """First and last index to keep, given which positions hold a value."""
+    lo, hi = 0, len(flags) - 1
+    if mode & 1:
+        while lo <= hi and not flags[lo]:
+            lo += 1
+    if mode & 2:
+        while hi >= lo and not flags[hi]:
+            hi -= 1
+    return lo, hi
+
+
+@fn("TRIMRANGE", kind="raw", min_args=1, max_args=3)
+def TRIMRANGE(ctx, rng, trim_rows=MISSING, trim_cols=MISSING):
+    tr = 3 if trim_rows is MISSING else to_int(scalar_arg(ctx, trim_rows))
+    tc = 3 if trim_cols is MISSING else to_int(scalar_arg(ctx, trim_cols))
+    if tr not in (0, 1, 2, 3) or tc not in (0, 1, 2, 3):
+        raise XLError(VALUE)
+    if isinstance(rng, ExcelError):
+        raise XLError(rng)
+    if isinstance(rng, RefValue):
+        # Rows and columns past the used area are blank; only scan the part inside it.
+        mr, mc = ctx.engine.bounds(rng.sheet)
+        r2, c2 = min(rng.r2, mr), min(rng.c2, mc)
+        rows = ctx.engine.range_rows(rng.sheet, rng.r1, rng.c1, r2, c2) if r2 >= rng.r1 and c2 >= rng.c1 else []
+        row_has = [any(v is not None for v in row) for row in rows]
+        row_has += [False] * (rng.nrows - len(row_has))
+        col_has = [any(row[j] is not None for row in rows) for j in range(c2 - rng.c1 + 1)] if rows else []
+        col_has += [False] * (rng.ncols - len(col_has))
+        if not any(row_has):
+            return RefValue(rng.sheet, rng.r1, rng.c1, rng.r1, rng.c1)
+        rlo, rhi = _trim_span(row_has, tr)
+        clo, chi = _trim_span(col_has, tc)
+        return RefValue(rng.sheet, rng.r1 + rlo, rng.c1 + clo, rng.r1 + rhi, rng.c1 + chi)
+    a = to_array(ctx, rng)
+    row_has = [any(v is not None for v in row) for row in a.rows]
+    if not any(row_has):
+        raise XLError(CALC)
+    col_has = [any(row[j] is not None for row in a.rows) for j in range(a.ncols)]
+    rlo, rhi = _trim_span(row_has, tr)
+    clo, chi = _trim_span(col_has, tc)
+    return Array([row[clo:chi + 1] for row in a.rows[rlo:rhi + 1]])

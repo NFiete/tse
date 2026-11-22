@@ -67,6 +67,19 @@ class Array:
         return f"Array({self.rows!r})"
 
 
+class FuncValue:
+    """A function passed as a value, such as SUM in GROUPBY(A1:A9,B1:B9,SUM) (an eta-reduced
+    LAMBDA; stored in files as _xleta.SUM)."""
+
+    __slots__ = ("name", "spec")
+
+    def __init__(self, name: str, spec):
+        self.name, self.spec = name, spec
+
+    def __repr__(self):
+        return f"FuncValue({self.name})"
+
+
 def is_number(v) -> bool:
     t = type(v)
     return t is int or t is float
@@ -246,6 +259,6 @@ def values_equal(a, b) -> bool:
 
 
 __all__ = [
-    "MISSING", "RefValue", "Array", "to_number", "to_int", "to_text", "to_bool", "compare",
+    "MISSING", "RefValue", "Array", "FuncValue", "to_number", "to_int", "to_text", "to_bool", "compare",
     "fix_number", "is_number", "check_error", "parse_number_text", "DIV0", "NA",
 ]
