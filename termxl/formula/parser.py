@@ -22,6 +22,7 @@ class FormulaSyntaxError(Exception):
 NUM, STR, BOOL, ERR, REFT, NAMET, FUNC, OP, LP, RP, COMMA, SEMI, LBRACE, RBRACE = (
     "NUM", "STR", "BOOL", "ERR", "REF", "NAME", "FUNC", "OP", "(", ")", ",", ";", "{", "}",
 )
+SREFT = "SREF"  # structured (table) reference such as Table1[Amount] or [@Qty]
 
 
 @dataclass
@@ -37,6 +38,24 @@ class RefInfo:
     ar2: bool = False
     ac2: bool = False
     sheet_raw: str = ""  # prefix exactly as written, including the '!'
+
+
+# Special item specifiers of structured references, by their lower-case spelling.
+SREF_ITEMS = {"#all": "all", "#data": "data", "#headers": "headers", "#totals": "totals",
+              "#this row": "thisrow"}
+_ITEM_TEXT = {"all": "#All", "data": "#Data", "headers": "#Headers", "totals": "#Totals",
+              "thisrow": "#This Row"}
+_ITEM_ORDER = ("all", "headers", "data", "totals", "thisrow")
+
+
+@dataclass(frozen=True)
+class StructRef:
+    """A parsed structured reference. table=None means "the table containing the formula"."""
+
+    table: str | None
+    items: frozenset = frozenset()  # subset of SREF_ITEMS values
+    col1: str | None = None  # None = every column
+    col2: str | None = None  # last column of a [A]:[B] span (None for a single column)
 
 
 @dataclass
@@ -114,6 +133,156 @@ def _make_ref(kind: str, body: str, sheet, sheet_raw: str) -> RefInfo | None:
     return RefInfo(sheet, "row", r1, 1, r2, MAX_COL, bool(a1), True, bool(a2), True, sheet_raw)
 
 
+def _match_bracket(src: str, i: int) -> int:
+    """Index just past the ']' matching the '[' at src[i] ("'" escapes the next character)."""
+    depth, n = 0, len(src)
+    while i < n:
+        ch = src[i]
+        if ch == "'":
+            i += 2
+            continue
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    raise FormulaSyntaxError("Missing ']' in table reference")
+
+
+def _unescape(name: str) -> str:
+    out, i = [], 0
+    while i < len(name):
+        if name[i] == "'" and i + 1 < len(name):
+            i += 1
+        out.append(name[i])
+        i += 1
+    return "".join(out)
+
+
+def _sref_parts(body: str) -> list[str]:
+    """Split "[a],[b]:[c]" into ["[a]", ",", "[b]", ":", "[c]"] (whitespace dropped)."""
+    parts, i, n = [], 0, len(body)
+    while i < n:
+        ch = body[i]
+        if ch in " \t\r\n":
+            i += 1
+        elif ch == "[":
+            j = _match_bracket(body, i)
+            parts.append(body[i:j])
+            i = j
+        elif ch in ",:":
+            parts.append(ch)
+            i += 1
+        else:
+            raise FormulaSyntaxError("Bad table reference")
+    return parts
+
+
+def _sref_columns(parts: list[str]) -> tuple[str | None, str | None]:
+    """Column part of a structured reference: ["[A]"] or ["[A]", ":", "[B]"]."""
+    if not parts:
+        return None, None
+    if len(parts) == 1:
+        return _unescape(parts[0][1:-1]), None
+    if len(parts) == 3 and parts[1] == ":":
+        return _unescape(parts[0][1:-1]), _unescape(parts[2][1:-1])
+    raise FormulaSyntaxError("Bad column range in table reference")
+
+
+def _scan_sref(src: str, i: int, table: str | None) -> tuple[int, StructRef]:
+    """Parse the bracketed part of a structured reference starting at src[i] == '['."""
+    j = _match_bracket(src, i)
+    body = src[i + 1:j - 1].strip()
+    items: set[str] = set()
+    cols: tuple = (None, None)
+    if not body:
+        pass
+    elif body.startswith("@"):
+        items.add("thisrow")
+        rest = body[1:].strip()
+        if rest.startswith("["):
+            cols = _sref_columns(_sref_parts(rest))
+        elif rest:
+            cols = (_unescape(rest), None)
+    elif body.startswith("#"):
+        item = SREF_ITEMS.get(" ".join(body.lower().split()))
+        if item is None:
+            raise FormulaSyntaxError(f"Unknown table item {body}")
+        items.add(item)
+    elif body.startswith("["):
+        parts = _sref_parts(body)
+        groups: list[list[str]] = [[]]
+        for p in parts:
+            if p == ",":
+                groups.append([])
+            else:
+                groups[-1].append(p)
+        col_groups = []
+        for g in groups:
+            if len(g) == 1 and g[0][1:].lstrip().startswith("#"):
+                item = SREF_ITEMS.get(" ".join(g[0][1:-1].lower().split()))
+                if item is None:
+                    raise FormulaSyntaxError(f"Unknown table item {g[0]}")
+                items.add(item)
+            elif g:
+                col_groups.append(g)
+            else:
+                raise FormulaSyntaxError("Bad table reference")
+        if len(col_groups) > 1:
+            raise FormulaSyntaxError("Bad table reference")
+        if col_groups:
+            cols = _sref_columns(col_groups[0])
+    else:
+        cols = (_unescape(body), None)
+    if "thisrow" in items and len(items) > 1:
+        raise FormulaSyntaxError("#This Row can't be combined with other items")
+    if len(items) > 1 and items not in ({"headers", "data"}, {"data", "totals"}):
+        raise FormulaSyntaxError("Invalid combination of table items")
+    return j, StructRef(table, frozenset(items), cols[0], cols[1])
+
+
+_SPECIAL_COL_CHARS = set("\t\n\r,:.[]#'\"{}$^&*+=-<>/")
+
+
+def _escape(name: str) -> str:
+    return "".join("'" + ch if ch in "[]#'" else ch for ch in name)
+
+
+def _col_text(name: str, bracket: bool) -> str:
+    return f"[{_escape(name)}]" if bracket else _escape(name)
+
+
+def sref_text(sr: StructRef, storage: bool = False, table: bool = True) -> str:
+    """Render a StructRef. storage=True spells "@" as [#This Row] (as xlsx files require);
+    table=False leaves out the table name."""
+    name = (sr.table or "") if table else ""
+    cols = None
+    if sr.col1 is not None:
+        cols = _col_text(sr.col1, True) + (":" + _col_text(sr.col2, True) if sr.col2 is not None else "")
+    items = [i for i in _ITEM_ORDER if i in sr.items]
+    if items == ["thisrow"] and not storage:
+        if cols is None:
+            return name + "[@]"
+        if sr.col2 is None and not any(ch in _SPECIAL_COL_CHARS or ch == " " for ch in sr.col1):
+            return f"{name}[@{_escape(sr.col1)}]"
+        return f"{name}[@{cols}]"
+    if not items:
+        if cols is None:
+            return name + "[]"
+        if sr.col2 is None and not any(ch in _SPECIAL_COL_CHARS for ch in sr.col1):
+            return f"{name}[{_escape(sr.col1)}]"
+        return f"{name}[{cols}]"
+    parts = [f"[{_ITEM_TEXT[i]}]" for i in items]
+    if cols is None and len(parts) == 1:
+        return f"{name}{parts[0]}"
+    if cols is not None:
+        parts.append(cols)
+    return f"{name}[{','.join(parts)}]"
+
+
+
 def tokenize(src: str) -> list[Token]:
     """Tokenize a formula body (without the leading '=')."""
     toks: list[Token] = []
@@ -163,8 +332,10 @@ def tokenize(src: str) -> list[Token]:
             append(Token(FUNC, text, i, j, text[:-1]))
         elif kind == "name" or kind == "sref":
             if m.group("sref"):
-                raise Unsupported("Structured references are not supported")
-            append(Token(NAMET, text, i, j, text))
+                j, sref = _scan_sref(src, j - 1, m.group("name"))
+                append(Token(SREFT, src[i:j], i, j, sref))
+            else:
+                append(Token(NAMET, text, i, j, text))
         elif kind == "bool":
             append(Token(BOOL, text, i, j, text.upper() == "TRUE"))
         elif kind == "err":
@@ -173,11 +344,14 @@ def tokenize(src: str) -> list[Token]:
             append(Token(ERR, text, i, j, ERROR_CODES["#REF!"]))
         elif kind == "pname":
             sheet = _unquote_sheet(m.group("pfx2"))
-            if "[" in sheet:
+            if "[" in sheet or src.startswith("[", j):
                 raise Unsupported("External workbook references are not supported")
             append(Token(NAMET, text, i, j, m.group("pname"), sheet=sheet))
         elif kind == "bracket":
-            raise Unsupported("Structured or external references are not supported")
+            j, sref = _scan_sref(src, i, None)
+            if j < n and (src[j].isalnum() or src[j] in "_'\\"):
+                raise Unsupported("External workbook references are not supported")  # [1]Sheet1!A1
+            append(Token(SREFT, src[i:j], i, j, sref))
         else:
             raise FormulaSyntaxError(f"Unexpected {text!r}")
         i = j
@@ -232,6 +406,16 @@ class NameNode(Node):
 
     def __repr__(self):
         return f"Name({self.name})"
+
+
+class StructRefNode(Node):
+    __slots__ = ("ref",)
+
+    def __init__(self, ref: StructRef):
+        self.ref = ref
+
+    def __repr__(self):
+        return f"SRef({sref_text(self.ref)})"
 
 
 class Func(Node):
@@ -354,6 +538,8 @@ class _Parser:
             return RefNode(t.ref)
         if k == NAMET:
             return NameNode(t.value, t.sheet)
+        if k == SREFT:
+            return StructRefNode(t.value)
         if k == OP and t.text in "+-":
             arg = self.expr(_PREFIX_BP)
             return Unary(t.text, arg)
@@ -574,9 +760,12 @@ def normalize(formula: str) -> str:
 
 
 def to_storage(formula: str) -> str:
-    """Add _xlfn. prefixes required by the xlsx format for newer functions."""
+    """Add _xlfn. prefixes required by the xlsx format for newer functions, and spell
+    [@Col] table references as [[#This Row],[Col]]."""
 
     def fn(t: Token):
+        if t.kind == SREFT:
+            return sref_text(t.value, storage=True) if "thisrow" in t.value.items else None
         if t.kind != FUNC:
             return None
         name = t.text[:-1]
@@ -590,11 +779,14 @@ def to_storage(formula: str) -> str:
 
 
 def to_display(formula: str) -> str:
-    """Strip _xlfn./_xlws. prefixes for display and editing."""
-    if "_xl" not in formula.lower():
+    """Strip _xlfn./_xlws. prefixes for display and editing, and show [#This Row] as @."""
+    low = formula.lower()
+    if "_xl" not in low and "#this row" not in low:
         return formula
 
     def fn(t: Token):
+        if t.kind == SREFT:
+            return sref_text(t.value) if "thisrow" in t.value.items else None
         if t.kind != FUNC:
             return None
         canon = canonical_func_name(t.text[:-1])
@@ -608,6 +800,6 @@ def is_error_literal(text: str) -> ExcelError | None:
 
 
 __all__ = [
-    "parse", "tokenize", "FormulaSyntaxError", "Unsupported", "translate", "transform_refs",
+    "parse", "tokenize", "StructRef", "StructRefNode", "sref_text", "SREFT", "FormulaSyntaxError", "Unsupported", "translate", "transform_refs",
     "normalize", "to_storage", "to_display", "RefInfo", "ref_text", "REF",
 ]

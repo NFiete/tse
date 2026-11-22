@@ -74,6 +74,9 @@ def validate_name(book, name: str, scope, exclude: tuple | None = None) -> str |
         return "A name can't look like a cell reference"
     if name.upper() in ("TRUE", "FALSE"):
         return "TRUE and FALSE can't be used as names"
+    hit = book.table_index().by_name.get(name.lower())
+    if hit is not None:
+        return f"'{hit.name}' is the name of a table"
     existing = find(book, name, scope)
     if existing is not None:
         if exclude is not None and exclude[1] is scope and exclude[0].lower() == name.lower():

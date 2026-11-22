@@ -87,6 +87,15 @@ deliberate performance measure for large workbooks; keep it when touching those 
   demand. Column dims are read through `Sheet._build_colw` (cached, reset by
   `invalidate_layout()`, which also bumps `Sheet.outline_gen`); write them via
   `structure.isolate_cols` so ranged dims like `B:XFD` are split rather than exploded.
+- `model/tables.py` handles Excel tables (openpyxl `ws.tables`). Structured references parse to
+  `StructRefNode` (`parser.StructRef`) and resolve through `Workbook.table_index()` /
+  `tables.resolve`. Stored formulas always name the table and spell `[@Col]` as
+  `[[#This Row],[Col]]` (`tables.qualify` in `set_raw`; display shows `[@Col]` inside the table).
+  Inside a transaction, call `book._touch_tables(sheet)` / `book._touch_names()` before changing
+  table or name metadata so undo restores it; `tables.after_edit` runs at the end of every
+  transaction to sync header names, totals-row functions, auto-expansion and calculated columns.
+  Changing tables needs `invalidate_tables()`; formulas with `structured`/`uses_names` are
+  re-registered by `tables_changed()`.
 - `model/inputparse.py` turns typed text (`12%`, `$5.50`, dates, times) into typed values + number
   format.
 

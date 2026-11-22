@@ -9,7 +9,7 @@ from textual import events
 from textual.widget import Widget
 from textual.widgets import Input, Static
 
-from ..formula.parser import REFT, FormulaSyntaxError, Unsupported, tokenize
+from ..formula.parser import REFT, SREFT, FormulaSyntaxError, Unsupported, tokenize
 
 
 class FormulaHighlighter(Highlighter):
@@ -30,7 +30,7 @@ class FormulaHighlighter(Highlighter):
         colors = self._app.grid.palette.ref_colors
         i = 0
         for t in toks:
-            if t.kind == REFT:
+            if t.kind == REFT or t.kind == SREFT:
                 text.stylize(f"bold #{colors[i % len(colors)]}", t.start + 1, t.end + 1)
                 i += 1
             elif t.kind == "STR":

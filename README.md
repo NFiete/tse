@@ -41,6 +41,13 @@ available. Run it from the source tree with `./txl` or `python3 -m termxl`.
 - **Named ranges.** Select cells, click the address box (top left), type a name and press Enter.
   Ctrl+F3 opens a Name Manager to create, edit, rename (formulas follow), delete and jump to
   names, with workbook or sheet scope. Names can also be constants or formulas (`Rate = 0.0825`).
+- **Tables.** Tables in a file work in formulas: `=SUM(Sales[Amount])`, `Sales[#Totals]`,
+  `Sales[[#Headers],[Qty]:[Price]]`, and `[@Qty]*[@Price]` for the same row inside the table.
+  Ctrl+T turns the selection (or the data around the cursor) into a table, or, inside a table,
+  renames or resizes it, adds a totals row, converts it back to a range or deletes it. As in
+  Excel, typing just below or right of a table extends it, a formula typed into an empty column
+  fills the whole column, renaming a header updates the formulas that use it, and inserted rows
+  get the column formulas. Table styles aren't drawn: cells show their own formatting.
 
 Press **F1** for the key reference and **Ctrl+P** for the command palette.
 
@@ -51,9 +58,11 @@ Press **F1** for the key reference and **Ctrl+P** for the command palette.
   models and some newer conditional formats**. If a file contains any of these you're warned
   when it opens, and saving over it asks first and offers to save a copy instead.
   Charts are kept, but some chart formatting may change.
-- If a formula uses a function term_xl doesn't implement (for example `BESSELJ`, or structured
-  table references like `Table1[Amount]`), the formula is kept unchanged and the cell keeps
-  the value Excel saved. The status bar tells you when you're on such a cell.
+- If a formula uses a function term_xl doesn't implement (for example `BESSELJ`, or references
+  to other workbooks), the formula is kept unchanged and the cell keeps the value Excel saved.
+  The status bar tells you when you're on such a cell.
+- Cutting and pasting a whole table moves its cells but not the table itself. Deleting a table
+  column leaves formulas that used it showing `#REF!` without rewriting them.
 - Dynamic-array formulas (`FILTER`, `UNIQUE`, `SORT`, `SEQUENCE`…) work inside other functions
   (`=SUM(FILTER(...))`), but results don't spill into neighbouring cells. A cell shows the
   first value.

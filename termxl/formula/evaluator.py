@@ -5,7 +5,7 @@ import math
 
 from . import functions  # noqa: F401  (registers all functions)
 from .errors import DIV0, NA, NAME, NUM, REF, VALUE, ExcelError, Unsupported, XLError
-from .parser import ArrayNode, Binary, Const, Func, Missing, NameNode, Node, RefNode, Unary
+from .parser import ArrayNode, Binary, Const, Func, Missing, NameNode, Node, RefNode, StructRefNode, Unary
 from .registry import FUNCTIONS, to_array
 from .values import MISSING, Array, RefValue, compare, fix_number, to_number, to_text
 
@@ -160,6 +160,8 @@ def evaluate(node: Node, ctx: Ctx):
         return RefValue(sheet, node.r1, node.c1, node.r2, node.c2)
     if t is Func:
         return _call(node, ctx)
+    if t is StructRefNode:
+        return ctx.engine.resolve_sref(node.ref, ctx.sheet, ctx.row, ctx.col)
     if t is Binary:
         op = node.op
         left = evaluate(node.left, ctx)
@@ -272,9 +274,13 @@ def unsupported_functions(node: Node) -> list[str]:
     return sorted({n.name for n in walk(node) if type(n) is Func and n.name not in FUNCTIONS})
 
 
+_STATIC_REFS = (RefNode, StructRefNode)
+
+
 def analyze(node: Node):
-    """One pass over an AST: (ref nodes, name nodes, function names, has dynamic range)."""
-    refs, names, funcs = [], [], set()
+    """One pass over an AST: (ref nodes, name nodes, function names, has dynamic range,
+    structured reference nodes)."""
+    refs, names, funcs, srefs = [], [], set(), []
     dynamic = False
     stack = [node]
     pop, push = stack.pop, stack.append
@@ -287,7 +293,7 @@ def analyze(node: Node):
             funcs.add(n.name)
             stack.extend(n.args)
         elif t is Binary:
-            if n.op == ":" and not (type(n.left) is RefNode and type(n.right) is RefNode):
+            if n.op == ":" and not (type(n.left) in _STATIC_REFS and type(n.right) in _STATIC_REFS):
                 dynamic = True
             push(n.left)
             push(n.right)
@@ -295,5 +301,7 @@ def analyze(node: Node):
             push(n.arg)
         elif t is NameNode:
             names.append(n)
-    return refs, names, funcs, dynamic
+        elif t is StructRefNode:
+            srefs.append(n)
+    return refs, names, funcs, dynamic, srefs
 

@@ -8,6 +8,7 @@ from openpyxl.worksheet.cell_range import CellRange, MultiCellRange
 from openpyxl.worksheet.dimensions import ColumnDimension
 
 from ..formula.parser import RefInfo, to_display, to_storage, transform_refs, transform_refs_tokens
+from . import tables
 from .refs import MAX_COL, MAX_ROW, Rect, col_index, col_letter, quote_sheet
 from .gcutil import paused_gc
 from .undo import UndoEntry
@@ -455,14 +456,15 @@ def _dirty_after(book, sheet, axis: str, idx: int, n: int, changed_post: set) ->
     return dirty
 
 
-def _apply(book, sheet, axis: str, idx: int, n: int):
+def _apply(book, sheet, axis: str, idx: int, n: int, table_fill: bool = True):
     """Shared implementation of insert (n > 0) and delete (n < 0)."""
     with paused_gc():
-        return _apply_inner(book, sheet, axis, idx, n)
+        return _apply_inner(book, sheet, axis, idx, n, table_fill)
 
 
-def _apply_inner(book, sheet, axis: str, idx: int, n: int):
+def _apply_inner(book, sheet, axis: str, idx: int, n: int, table_fill: bool = True):
     f = _shift_fn(axis, idx, n)
+    has_tables = bool(book.table_index().by_name)
     changed_pre, names_changed = _rewrite_all(book, sheet, axis, idx, f)
     deleted = _move_cells(sheet, axis, idx, n)
     removed_dims = _shift_dims(sheet, axis, idx, n)
@@ -470,10 +472,20 @@ def _apply_inner(book, sheet, axis: str, idx: int, n: int):
         _copy_formats(sheet, axis, idx - 1, idx, n)
     _shift_merged(sheet, axis, idx, n)
     _shift_misc(sheet, axis, idx, n)
+    new_formulas = tables.shift(book, sheet, axis, idx, n, fill=table_fill)
     changed_post = _reindex(book, sheet, axis, idx, n, changed_pre, names_changed)
     book._pending_tokens = {}
     sheet.recompute_bounds()
     dirty = _dirty_after(book, sheet, axis, idx, n, changed_post)
+    if has_tables:
+        from .workbook import _formula_text
+
+        for r, c in new_formulas:
+            cell = sheet.ws._cells.get((r, c))
+            if cell is not None and cell.data_type == "f":
+                book._register(sheet, r, c, _formula_text(cell._value))
+                dirty.add((sheet, r, c))
+        dirty |= book.reregister_structured()
     damaged_pre = book._damaged_pre
     book._damaged = set()
     book._damaged_pre = {}
@@ -484,13 +496,15 @@ def _apply_inner(book, sheet, axis: str, idx: int, n: int):
     return damaged_pre, deleted, removed_dims
 
 
-def insert(book, sheet, axis: str, idx: int, n: int = 1, record: bool = True):
-    """Insert n empty rows (axis='row') or columns before index idx."""
+def insert(book, sheet, axis: str, idx: int, n: int = 1, record: bool = True, table_fill: bool = True):
+    """Insert n empty rows (axis='row') or columns before index idx.
+
+    New rows inside a table get its calculated-column formulas unless table_fill is False."""
     limit = MAX_ROW if axis == "row" else MAX_COL
     used = sheet.max_row if axis == "row" else sheet.max_col
     if used + n > limit:
         raise ValueError("That would push data off the end of the sheet")
-    _apply(book, sheet, axis, idx, n)
+    _apply(book, sheet, axis, idx, n, table_fill)
     if record:
         where = (sheet.name, Rect(idx, 1, idx + n - 1, MAX_COL) if axis == "row" else Rect(1, idx, MAX_ROW, idx + n - 1))
         book.undo.push(UndoEntry(f"Insert {axis}s", lambda: delete(book, sheet, axis, idx, n, record=False),
@@ -499,6 +513,9 @@ def insert(book, sheet, axis: str, idx: int, n: int = 1, record: bool = True):
 
 def delete(book, sheet, axis: str, idx: int, n: int = 1, record: bool = True):
     """Delete n rows/columns starting at idx."""
+    if record:
+        tables.check_delete(book, sheet, axis, idx, n)
+    old_tables = tables.snapshot(sheet)
     old_merged = [mr.coord for mr in sheet.ws.merged_cells.ranges]
     # Only references that were cut (not merely shifted) need restoring on undo:
     # re-inserting the rows shifts everything else back exactly.
@@ -509,7 +526,8 @@ def delete(book, sheet, axis: str, idx: int, n: int = 1, record: bool = True):
     def undo():
         from .workbook import _formula_text
 
-        insert(book, sheet, axis, idx, n, record=False)
+        insert(book, sheet, axis, idx, n, record=False, table_fill=False)
+        tables.restore(book, sheet, old_tables)
         ws = sheet.ws
         restored = set()
         for (r, c), (value, dtype, style) in deleted.items():
@@ -547,7 +565,7 @@ def delete(book, sheet, axis: str, idx: int, n: int = 1, record: bool = True):
             if cell is not None and cell.data_type == "f" and cell._value is not None:
                 book._register(s, r, c, _formula_text(cell._value))
         sheet.recompute_bounds()
-        book.recalc(restored)
+        book.tables_changed(restored)
 
     where = (sheet.name, Rect(idx, 1, idx + n - 1, MAX_COL) if axis == "row" else Rect(1, idx, MAX_ROW, idx + n - 1))
     book.undo.push(UndoEntry(f"Delete {axis}s", undo, lambda: delete(book, sheet, axis, idx, n, record=False), where))

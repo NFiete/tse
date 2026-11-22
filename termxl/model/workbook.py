@@ -21,8 +21,8 @@ from ..formula.deps import DepGraph
 from ..formula.errors import CIRC, ERROR_CODES, NAME, VALUE, Unsupported, XLError
 from ..formula.functions import date_fns
 from ..formula.parser import (
-    Binary, Func, FormulaSyntaxError, NameNode, RefNode, normalize, parse, parse_tokens, to_display,
-    to_storage,
+    Binary, Func, FormulaSyntaxError, NameNode, RefNode, StructRef, StructRefNode, normalize, parse,
+    parse_tokens, to_display, to_storage,
 )
 from .dates import to_serial
 from .inputparse import parse_input
@@ -41,7 +41,8 @@ _FORMAT_INHERITING = {"SUM", "AVERAGE", "MIN", "MAX", "MEDIAN", "ROUND", "ROUNDU
 
 
 class Formula:
-    __slots__ = ("text", "ast", "volatile", "unsupported", "error", "array", "positional")
+    __slots__ = ("text", "ast", "volatile", "unsupported", "error", "array", "positional", "structured",
+                 "uses_names")
 
     def __init__(self, text: str):
         self.text = text  # display form, with leading '='
@@ -51,6 +52,8 @@ class Formula:
         self.error: str | None = None
         self.array = False
         self.positional = False  # uses ROW()/COLUMN(): value depends on where the cell is
+        self.structured = False  # uses table references: re-resolve when tables change
+        self.uses_names = False
 
 
 class Sheet:
@@ -213,6 +216,10 @@ class Workbook:
         self._pending_tokens: dict = {}
         self._damaged: set = set()
         self._damaged_pre: dict = {}
+        self._tables = None  # TableIndex, built on demand
+        self._tx_tables: dict | None = None
+        self._tx_names: dict | None = None
+        self._tx_expand = False
         self._load_names()
 
     # ------------------------------------------------------------------ setup
@@ -245,6 +252,7 @@ class Workbook:
     def register_all(self, use_cached: bool = True):
         """Parse every formula in the workbook and build the dependency graph."""
         self.graph.clear()
+        self._tables = None
         for s in self.sheets:
             s.formulas.clear()
             for (r, c), cell in s.ws._cells.items():
@@ -287,14 +295,73 @@ class Workbook:
     def is_formula(self, sheet: Sheet, r: int, c: int) -> bool:
         return (r, c) in sheet.formulas
 
-    def resolve_name(self, name: str, sheet: Sheet, explicit_sheet: str | None = None):
+    def resolve_name(self, name: str, sheet: Sheet, explicit_sheet: str | None = None, tables: bool = True):
         low = name.lower()
         if explicit_sheet is not None:
             return self.sheet_names.get((explicit_sheet.lower(), low))
         ast = self.sheet_names.get((sheet.name.lower(), low))
         if ast is not None:
             return ast
-        return self.names.get(low)
+        ast = self.names.get(low)
+        if ast is None and tables:
+            hit = self.table_index().by_name.get(low)
+            if hit is not None:
+                return StructRefNode(StructRef(hit.name))  # a bare table name is its data
+        return ast
+
+    # ------------------------------------------------------------------ tables
+
+    def table_index(self):
+        if self._tables is None:
+            from .tables import TableIndex
+
+            self._tables = TableIndex(self)
+        return self._tables
+
+    def invalidate_tables(self):
+        self._tables = None
+
+    def resolve_sref(self, sr, sheet: Sheet, r: int, c: int):
+        from ..formula.values import RefValue
+        from .tables import resolve
+
+        res = resolve(self, sr, sheet, r, c)
+        if isinstance(res, tuple):
+            return RefValue(*res)
+        return res
+
+    def reregister_structured(self) -> set:
+        """Re-parse formulas that use table references (after tables changed). Returns their keys."""
+        self._tables = None
+        keys = set()
+        for s in self.sheets:
+            cells = s.ws._cells
+            for rc, f in list(s.formulas.items()):
+                if not (f.structured or f.uses_names):
+                    continue
+                cell = cells.get(rc)
+                if cell is None or cell.data_type != "f" or cell._value is None:
+                    continue
+                value = s.values.get(rc)
+                self._unregister(s, rc[0], rc[1])
+                self._register(s, rc[0], rc[1], _formula_text(cell._value), array=isinstance(cell._value, ArrayFormula))
+                if value is not None:
+                    s.values[rc] = value
+                keys.add((s, rc[0], rc[1]))
+        return keys
+
+    def tables_changed(self, extra=()) -> set:
+        """Re-resolve table references and recalculate what depends on them."""
+        changed = self.reregister_structured() | set(extra)
+        dirty = self.graph.all_dependents(changed)
+        dirty |= {k for k in changed if (k[1], k[2]) in k[0].formulas}
+        vol = self.graph.volatile
+        if vol:
+            dirty |= vol | self.graph.all_dependents(vol)
+        if dirty:
+            self._run(dirty)
+        self.modified = True
+        return dirty | set(extra)
 
     def get_value(self, sheet: Sheet, r: int, c: int):
         rc = (r, c)
@@ -375,6 +442,10 @@ class Workbook:
     def _register(self, sheet: Sheet, r: int, c: int, storage_text: str, array: bool = False, tokens=None):
         display = to_display(storage_text)
         f = Formula(display)
+        if "[" in display and self.table_index().by_sheet.get(sheet):
+            from .tables import display_in_place
+
+            f.text = display_in_place(self, display, sheet, r, c)
         f.array = array
         key = (sheet, r, c)
         try:
@@ -386,7 +457,7 @@ class Workbook:
             f.unsupported = [str(e)]
         refs: list = []
         if f.ast is not None:
-            ref_nodes, name_nodes, funcs, dyn = ev.analyze(f.ast)
+            ref_nodes, name_nodes, funcs, dyn, sref_nodes = ev.analyze(f.ast)
             functions = ev.FUNCTIONS
             unsupported = [n for n in funcs if n not in functions]
             f.unsupported = sorted(unsupported) if unsupported else []
@@ -397,15 +468,28 @@ class Workbook:
                 s = sheet if n.sheet is None else by_name(n.sheet)
                 if s is not None:
                     refs.append((s, n.r1, n.c1, n.r2, n.c2))
+            if sref_nodes:
+                f.structured = True
+                for n in sref_nodes:
+                    self._sref_dep(n.ref, sheet, r, c, refs)
+            if name_nodes:
+                f.uses_names = True
             for n in name_nodes:
                 target = self.resolve_name(n.name, sheet, n.sheet)
                 if target is not None:
-                    f.volatile |= self._collect_refs(target, sheet, refs, 1)
+                    f.volatile |= self._collect_refs(target, sheet, refs, 1, r, c)
         sheet.formulas[(r, c)] = f
         self.graph.add(key, refs, f.volatile)
         return f
 
-    def _collect_refs(self, node, sheet: Sheet, out: list, depth: int) -> bool:
+    def _sref_dep(self, sr, sheet: Sheet, r: int, c: int, out: list):
+        from .tables import resolve
+
+        res = resolve(self, sr, sheet, r, c)
+        if isinstance(res, tuple):
+            out.append(res)
+
+    def _collect_refs(self, node, sheet: Sheet, out: list, depth: int, r: int = 1, c: int = 1) -> bool:
         """Append (sheet, r1, c1, r2, c2) refs used by node. Returns True if refs are dynamic."""
         dynamic = False
         for n in ev.walk(node):
@@ -414,11 +498,14 @@ class Workbook:
                 s = sheet if n.sheet is None else self.sheet_by_name(n.sheet)
                 if s is not None:
                     out.append((s, n.r1, n.c1, n.r2, n.c2))
+            elif t is StructRefNode:
+                self._sref_dep(n.ref, sheet, r, c, out)
             elif t is NameNode and depth < 20:
                 target = self.resolve_name(n.name, sheet, n.sheet)
                 if target is not None:
-                    dynamic |= self._collect_refs(target, sheet, out, depth + 1)
-            elif t is Binary and n.op == ":" and not (type(n.left) is RefNode and type(n.right) is RefNode):
+                    dynamic |= self._collect_refs(target, sheet, out, depth + 1, r, c)
+            elif t is Binary and n.op == ":" and not (type(n.left) in ev._STATIC_REFS
+                                                      and type(n.right) in ev._STATIC_REFS):
                 dynamic = True
         return dynamic
 
@@ -543,11 +630,48 @@ class Workbook:
             sheet.max_row = max(sheet.max_row, r)
             sheet.max_col = max(sheet.max_col, c)
 
-    def _apply_snaps(self, snaps: dict) -> set:
+    def _apply_snaps(self, snaps: dict, tables: dict | None = None, names: dict | None = None) -> set:
+        if tables:
+            from .tables import restore
+
+            for sheet, snap in tables.items():
+                restore(self, sheet, snap)
+        if names:
+            self._restore_names(names)
         for key, snap in snaps.items():
             self._restore(key, snap)
         self.modified = True
+        if tables or names:
+            return self.tables_changed(snaps.keys())
         return self.recalc(snaps.keys())
+
+    def _touch_tables(self, sheet: Sheet):
+        """Record a sheet's tables before changing them (inside a transaction) for undo."""
+        if self._tx_tables is not None and sheet not in self._tx_tables:
+            from .tables import snapshot
+
+            self._tx_tables[sheet] = snapshot(sheet)
+
+    def _names_state(self) -> dict:
+        out = {}
+        for key, dn in self.wb.defined_names.items():
+            out[(None, key)] = dn.attr_text
+        for s in self.sheets:
+            for key, dn in s.ws.defined_names.items():
+                out[(s, key)] = dn.attr_text
+        return out
+
+    def _touch_names(self):
+        if self._tx_names is not None and not self._tx_names:
+            self._tx_names.update(self._names_state())
+
+    def _restore_names(self, state: dict):
+        for (s, key), text in state.items():
+            store = self.wb.defined_names if s is None else s.ws.defined_names
+            dn = store.get(key)
+            if dn is not None:
+                dn.attr_text = text
+        self._load_names()
 
     @contextmanager
     def transaction(self, label: str, where=None):
@@ -555,18 +679,32 @@ class Workbook:
         if self._tx is not None:
             yield
             return
-        self._tx, self._tx_keys = {}, set()
+        self._tx, self._tx_keys, self._tx_tables, self._tx_names = {}, set(), {}, {}
         try:
             yield
+            if self._tx_keys and self.table_index().by_sheet:
+                from .tables import after_edit
+
+                after_edit(self, set(self._tx_keys), self._tx_expand)
         finally:
-            before, keys = self._tx, self._tx_keys
-            self._tx = self._tx_keys = None
-        if keys:
+            before, keys, tbefore, nbefore = self._tx, self._tx_keys, self._tx_tables, self._tx_names
+            self._tx = self._tx_keys = self._tx_tables = self._tx_names = None
+            self._tx_expand = False
+        if keys or tbefore or nbefore:
+            from .tables import snapshot
+
             after = {k: self._snap(*k) for k in before}
-            self.undo.push(UndoEntry(label, lambda b=before: self._apply_snaps(b),
-                                     lambda a=after: self._apply_snaps(a), where))
+            tafter = {s: snapshot(s) for s in tbefore}
+            nafter = self._names_state() if nbefore else {}
+            self.undo.push(UndoEntry(label, lambda: self._apply_snaps(before, tbefore, nbefore),
+                                     lambda: self._apply_snaps(after, tafter, nafter), where))
             self.modified = True
-            self.last_changed = self.recalc(keys) | keys
+            if tbefore or nbefore:
+                if nbefore:
+                    self._load_names()
+                self.last_changed = self.tables_changed(keys) | keys
+            else:
+                self.last_changed = self.recalc(keys) | keys
         else:
             self.last_changed = set()
 
@@ -585,6 +723,10 @@ class Workbook:
             return
         if value is None and existing is None:
             return
+        if isinstance(value, str) and value.startswith("=") and "[" in value and data_type is None:
+            from .tables import qualify
+
+            value = qualify(self, value, sheet, r, c)
         self._touch(sheet, r, c)
         self._unregister(sheet, r, c)
         cell = existing if existing is not None else sheet.ws.cell(row=r, column=c)
@@ -614,6 +756,7 @@ class Workbook:
         """Apply text typed by the user. Raises FormulaSyntaxError for bad formulas."""
         p = parse_input(text, self.epoch1904)
         with self.transaction("Edit cell", (sheet.name, Rect(r, c, r, c))):
+            self._tx_expand = True
             self._apply_parsed(sheet, r, c, p)
 
     def _apply_parsed(self, sheet, r, c, p):

@@ -30,9 +30,11 @@ def test_syntax_errors(bad):
         parse(bad)
 
 
-def test_structured_refs_unsupported():
+def test_external_refs_unsupported():
     with pytest.raises(Unsupported):
-        parse("=SUM(Table1[Amount])")
+        parse("=[1]Sheet1!A1")
+    with pytest.raises(Unsupported):
+        parse("='[Book.xlsx]Sheet1'!A1")
 
 
 def test_translate():

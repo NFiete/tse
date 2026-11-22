@@ -14,12 +14,14 @@ from textual.widgets import Footer, Input, Static
 
 from ..format.numfmt import format_value
 from ..formula.errors import ExcelError
-from ..formula.parser import REFT, FormulaSyntaxError, Unsupported, tokenize
+from ..formula.parser import REFT, SREFT, FormulaSyntaxError, Unsupported, tokenize
 from ..formula.registry import wildcard_regex
 from ..io import xlsx
-from ..model import names, outline, structure
+from ..model import names, outline, structure, tables
 from ..model.refs import MAX_COL, MAX_ROW, Rect, addr, col_letter, quote_sheet
-from .dialogs import ChoiceDialog, FindDialog, HelpScreen, InputDialog, NameEditDialog, NameManagerDialog
+from .dialogs import (
+    ChoiceDialog, FindDialog, HelpScreen, InputDialog, NameEditDialog, NameManagerDialog, TableDialog,
+)
 from .grid import Grid
 from .theme import DARK, LIGHT
 from .widgets import FormulaHighlighter, FormulaInput, NameBox, SheetTabs, StatusBar, cycle_absolute
@@ -100,6 +102,7 @@ class TermXLApp(App):
         Binding("ctrl+pagedown", "sheet(1)", show=False),
         Binding("f9", "recalc", show=False),
         Binding("ctrl+f3", "name_manager", "Names", show=False),
+        Binding("ctrl+t", "table", "Table", show=False),
         Binding("alt+equals_sign,alt+plus,ctrl+plus,ctrl+equals_sign", "insert", "Insert", show=False),
         Binding("alt+minus,ctrl+minus", "delete", "Delete", show=False),
         Binding("alt+left", "col_width(-1)", show=False),
@@ -297,6 +300,15 @@ class TermXLApp(App):
                 msg = "Note: " + cell.comment.text.replace("\n", " ")[:200]
             elif cell is not None and cell.hyperlink is not None:
                 msg = "Link: " + (cell.hyperlink.target or cell.hyperlink.location or "")
+            else:
+                hit = tables.table_at(self.book, sheet, r, c)
+                if hit is not None:
+                    names_ = hit.col_names()
+                    i = c - hit.g.c1
+                    part = ("header" if hit.g.hdr and r == hit.g.r1 else
+                            "totals row" if hit.g.tot and r == hit.g.r2 else "")
+                    msg = f"Table {hit.name}, column {names_[i] if i < len(names_) else '?'}" + \
+                          (f" ({part})" if part else "") + "  (Ctrl+T: table settings)"
         book = self.book
         name = os.path.basename(book.path) if book.path else "untitled"
         label = ("● " if book.modified else "") + name
@@ -358,13 +370,20 @@ class TermXLApp(App):
                 toks = []
             colors = g.palette.ref_colors
             i = 0
+            e = self.editing
             for t in toks:
                 if t.kind == REFT:
                     info = t.ref
-                    s = self.editing.sheet if info.sheet is None else self.book.sheet_by_name(info.sheet)
+                    s = e.sheet if info.sheet is None else self.book.sheet_by_name(info.sheet)
                     if s is not None:
                         r2 = min(info.r2, MAX_ROW)
                         hl.append((s, Rect.of(info.r1, info.c1, r2, info.c2), colors[i % len(colors)]))
+                    i += 1
+                elif t.kind == SREFT:
+                    res = tables.resolve(self.book, t.value, e.sheet, e.r, e.c)
+                    if isinstance(res, tuple):
+                        s, r1, c1, r2, c2 = res
+                        hl.append((s, Rect.of(r1, c1, r2, c2), colors[i % len(colors)]))
                     i += 1
         g.ref_highlights = hl
 
@@ -505,7 +524,8 @@ class TermXLApp(App):
             try:
                 self.book.set_input(e.sheet, e.r, e.c, text)
             except FormulaSyntaxError as err:
-                self.notify(f"There's a problem with this formula: {err}", severity="error", timeout=6)
+                self.notify(f"There's a problem with this formula: {err}", severity="error", timeout=6,
+                            markup=False)
                 return False
         self._end_edit()
         if g.sheet is not e.sheet:
@@ -1262,6 +1282,9 @@ class TermXLApp(App):
             target = names.resolve_rect(self.book, info.name, g.sheet)
             if target is not None and target[0] is g.sheet and target[1] == sel:
                 return info.name
+        for hit in self.book.table_index().by_sheet.get(g.sheet, ()):
+            if sel == hit.g.data_rect or sel == hit.g.rect:
+                return hit.name
         return None
 
     @on(Input.Submitted, "#namebox")
@@ -1379,6 +1402,133 @@ class TermXLApp(App):
         self.after_change(layout=True)
         return True
 
+    # ------------------------------------------------------------------ tables
+
+    def _table_here(self):
+        g = self.grid
+        return tables.table_at(self.book, g.sheet, *g.active)
+
+    def action_table(self):
+        """Ctrl+T: edit the table at the cursor, or make the selection (or current region) a table."""
+        if not self._need_grid():
+            return
+        if self._table_here() is not None:
+            self.edit_table_dialog()
+        else:
+            self.create_table_dialog()
+
+    def _table_range(self, text: str):
+        target = self._resolve_goto(text.strip())
+        if target is None:
+            return None, "Enter a range such as A1:D20"
+        sheet, rect = target
+        if sheet is not self.grid.sheet:
+            return None, "The range has to be on this sheet"
+        return self.book.clip(sheet, rect), None
+
+    def create_table_dialog(self):
+        if not self._need_grid():
+            return
+        g = self.grid
+        sel = self.book.clip(g.sheet, g.selection)
+        if sel.rows * sel.cols == 1:
+            sel = self._current_region(*g.active)
+        name = tables.default_name(self.book)
+
+        def submit(name, ref, headers, totals):
+            rect, err = self._table_range(ref)
+            if err:
+                return err
+            try:
+                t = tables.create(self.book, g.sheet, rect, headers, name)
+            except ValueError as e:
+                return str(e)
+            self._select(tables.geom(t).rect)
+            self.set_message(f"Created table {t.displayName} ({t.ref}). Use it in formulas as "
+                             f"{t.displayName}[{t.tableColumns[0].name}]")
+            self.after_change()
+            return None
+
+        self.push_screen(TableDialog(submit, name, sel.a1()))
+
+    def edit_table_dialog(self):
+        if not self._need_grid():
+            return
+        hit = self._table_here()
+        if hit is None:
+            self.notify("The cursor isn't in a table (Ctrl+T on a range creates one)", severity="warning")
+            return
+        name = hit.name
+
+        def submit(new_name, ref, headers, totals):
+            cur = tables.find_table(self.book, name)
+            if cur is None:
+                return "The table no longer exists"
+            rect, err = self._table_range(ref)
+            if err:
+                return err
+            u = self.book.undo
+            top = u.entries[u.pos - 1] if u.pos else None
+            try:
+                with self.book.transaction("Table settings", (cur.sheet.name, cur.g.rect)):
+                    if new_name != cur.name:
+                        tables.rename(self.book, cur, new_name)
+                        cur = tables.find_table(self.book, new_name)
+                    if rect != cur.g.rect:
+                        tables.resize(self.book, cur, rect)
+                        cur = tables.find_table(self.book, cur.name)
+                    if totals != bool(cur.g.tot):
+                        tables.set_totals(self.book, cur, totals)
+            except ValueError as e:
+                if u.pos and u.entries[u.pos - 1] is not top:  # roll back the part that was done
+                    self.book.do_undo()
+                    del u.entries[u.pos:]
+                self.after_change()
+                return str(e)
+            self.set_message(f"Updated table {new_name}")
+            self.after_change()
+            return None
+
+        def done(result):
+            cur = tables.find_table(self.book, name)
+            if result == "convert" and cur is not None:
+                tables.convert_to_range(self.book, cur)
+                self.set_message(f"Converted table {name} to a normal range (Ctrl+Z undoes this)")
+                self.after_change()
+            elif result == "delete" and cur is not None:
+                tables.delete_table(self.book, cur)
+                self.set_message(f"Deleted table {name} and its contents (Ctrl+Z undoes this)")
+                self.after_change()
+
+        self.push_screen(TableDialog(submit, name, hit.g.rect.a1(), editing=True, totals=bool(hit.g.tot)), done)
+
+    def table_command(self, what: str):
+        if not self._need_grid():
+            return
+        hit = self._table_here()
+        if hit is None:
+            self.notify("The cursor isn't in a table", severity="warning")
+            return
+        try:
+            if what == "totals":
+                tables.set_totals(self.book, hit, not hit.g.tot)
+                self.set_message(f"{'Removed' if hit.g.tot else 'Added'} the totals row of {hit.name}")
+            elif what == "convert":
+                tables.convert_to_range(self.book, hit)
+                self.set_message(f"Converted table {hit.name} to a normal range")
+            elif what == "delete":
+                tables.delete_table(self.book, hit)
+                self.set_message(f"Deleted table {hit.name}")
+            elif what == "select":
+                self._select(hit.g.data_rect)
+            elif what == "column":
+                c = self.grid.active[1]
+                self._select(Rect(hit.g.data_r1, c, hit.g.data_r2, c))
+        except ValueError as e:
+            self.notify(str(e), severity="error")
+            return
+        self.after_change()
+
     # ------------------------------------------------------------------ navigation dialogs
 
     def action_goto(self):
@@ -1390,7 +1540,7 @@ class TermXLApp(App):
                 return
             target = self._resolve_goto(v.strip())
             if target is None:
-                self.notify(f"Can't find {v}", severity="error")
+                self.notify(f"Can't find {v}", severity="error", markup=False)
                 return
             sheet, rect = target
             g = self.grid
@@ -1416,12 +1566,23 @@ class TermXLApp(App):
         if rect is not None:
             return sheet, rect
         ast = self.book.resolve_name(text, sheet)
-        from ..formula.parser import RefNode
+        from ..formula.parser import RefNode, StructRefNode, parse
 
+        if ast is None and "[" in text:
+            try:
+                ast = parse("=" + text)
+            except (FormulaSyntaxError, Unsupported):
+                ast = None
         if isinstance(ast, RefNode):
             s = sheet if ast.sheet is None else self.book.sheet_by_name(ast.sheet)
             if s is not None:
                 return s, Rect(ast.r1, ast.c1, min(ast.r2, MAX_ROW), ast.c2)
+        if isinstance(ast, StructRefNode):
+            r, c = self.grid.active
+            res = tables.resolve(self.book, ast.ref, sheet, r, c)
+            if isinstance(res, tuple):
+                s, r1, c1, r2, c2 = res
+                return s, Rect(r1, c1, r2, c2)
         return None
 
     def action_find(self, replace: bool = False):
@@ -1724,6 +1885,21 @@ class TermXLApp(App):
         yield C("Name manager…", "List, create, edit and delete named ranges (Ctrl+F3)", self.action_name_manager)
         yield C("Define name…", "Name the current selection (or type a name in the address box)",
                 self.action_define_name)
+        yield C("Create table…", "Make the selection (or the data around the cursor) a table (Ctrl+T)",
+                self.create_table_dialog)
+        if self._table_here() is not None:
+            yield C("Table settings…", "Rename or resize the table at the cursor, totals row (Ctrl+T)",
+                    self.edit_table_dialog)
+            yield C("Table: toggle totals row", "Show or hide the totals row below the table",
+                    lambda: self.table_command("totals"))
+            yield C("Table: select data", "Select the data rows of the table at the cursor",
+                    lambda: self.table_command("select"))
+            yield C("Table: select column", "Select the data of the table column at the cursor",
+                    lambda: self.table_command("column"))
+            yield C("Table: convert to range", "Remove the table but keep its cells; table references "
+                    "in formulas become normal references", lambda: self.table_command("convert"))
+            yield C("Table: delete", "Delete the table at the cursor and its contents",
+                    lambda: self.table_command("delete"))
         yield C("Go to…", "Jump to a cell, range or name (Ctrl+G)", self.action_goto)
         yield C("Find…", "Find text (Ctrl+F)", self.action_find)
         yield C("Replace…", "Find and replace (Ctrl+H)", self.action_replace)

@@ -251,6 +251,9 @@ HELP_TEXT = """\
   Ctrl+F / Ctrl+H               find / replace
   F9                            recalculate everything
   Ctrl+F3                       name manager: create, edit, delete named ranges
+  Ctrl+T                        make the selection a table, or edit the table at the cursor
+                                (name, range, totals row, convert to range); formulas can use
+                                Table1\\[Column], Table1\\[#Totals] and \\[@Column] inside the table
 
 [b]Files[/b]
   Ctrl+S / F12                  save / save as  (.xlsx, .xlsm, .csv)
@@ -341,6 +344,83 @@ class NameEditDialog(ModalScreen):
             self.query_one("#error", Static).update(err)
             return
         self.dismiss(name)
+
+    @on(Button.Pressed, "#cancel")
+    def action_cancel(self):
+        self.dismiss(None)
+
+
+class TableDialog(ModalScreen):
+    """Create a table, or edit one (name, range, totals row; convert or delete it).
+
+    on_submit(name, range_text, headers, totals) -> error text or None.
+    Dismisses with "ok", "convert", "delete" or None."""
+
+    DEFAULT_CSS = DIALOG_CSS + """
+    TableDialog .field { margin-top: 1; }
+    """
+    BINDINGS = [Binding("escape", "cancel", show=False)]
+
+    def __init__(self, on_submit, name: str, ref: str, editing: bool = False, totals: bool = False,
+                 headers: bool = True):
+        super().__init__()
+        self._on_submit = on_submit
+        self._name, self._ref = name, ref
+        self._editing, self._totals, self._headers = editing, totals, headers
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(f"Table {self._name}" if self._editing else "Create table", classes="title")
+            yield Label("Table name:")
+            yield Input(value=self._name, placeholder="e.g. Sales", id="name")
+            yield Label("Range (including the header row):" if self._editing or self._headers else "Range:",
+                        classes="field")
+            yield Input(value=self._ref, placeholder="e.g. A1:D20", id="range")
+            with Horizontal(classes="opts"):
+                if self._editing:
+                    yield Checkbox("Totals row", value=self._totals, id="totals")
+                else:
+                    yield Checkbox("My table has headers", value=self._headers, id="headers")
+            if self._editing:
+                yield Static("Formulas can use the table as e.g. =SUM(" + self._name + "[Column]), or [@Column] "
+                             "for the same row inside it.", classes="msg", markup=False)
+            else:
+                yield Static("Without headers, the row above the range gets Column1, Column2, …", classes="msg")
+            yield Static("", classes="error", id="error", markup=False)
+            with Horizontal(classes="buttons"):
+                if self._editing:
+                    yield Button("Delete table", id="delete")
+                    yield Button("Convert to range", id="convert")
+                yield Button("Cancel", id="cancel")
+                yield Button("OK", variant="primary", id="ok")
+
+    def on_mount(self):
+        target = self.query_one("#name" if self._editing else "#range", Input)
+        target.focus()
+        target.cursor_position = len(target.value)
+
+    @on(Input.Submitted)
+    @on(Button.Pressed, "#ok")
+    def submit(self):
+        name = self.query_one("#name", Input).value.strip()
+        ref = self.query_one("#range", Input).value.strip()
+        if self._editing:
+            headers, totals = True, self.query_one("#totals", Checkbox).value
+        else:
+            headers, totals = self.query_one("#headers", Checkbox).value, False
+        err = self._on_submit(name, ref, headers, totals)
+        if err:
+            self.query_one("#error", Static).update(err)
+            return
+        self.dismiss("ok")
+
+    @on(Button.Pressed, "#convert")
+    def convert(self):
+        self.dismiss("convert")
+
+    @on(Button.Pressed, "#delete")
+    def delete(self):
+        self.dismiss("delete")
 
     @on(Button.Pressed, "#cancel")
     def action_cancel(self):
