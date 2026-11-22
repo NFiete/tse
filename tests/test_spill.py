@@ -296,6 +296,25 @@ def test_legacy_formulas_use_implicit_intersection(tmp_path):
     assert saved["C1"].value.ref == "C1:C5"
 
 
+def test_legacy_criteria_ranges_intersect(tmp_path):
+    """In a legacy formula a multi-cell criteria range is implicitly intersected; an array
+    constant still gives one result per element (the SUM(COUNTIF(r,{...})) idiom)."""
+    wb = openpyxl.Workbook()
+    w = wb.active
+    for i, v in enumerate(["a", "b", "a", "c"], 1):
+        w.cell(i, 1, v)
+    w["B3"] = "=COUNTIF(A1:A4,A1:A4)"  # row 3 -> criteria A3 ("a")
+    w["C1"] = '=SUM(COUNTIF(A1:A4,{"a","c"}))'
+    p = str(tmp_path / "legacy_crit.xlsx")
+    wb.save(p)
+    book = xlsx.load(p)
+    s = book.sheets[0]
+    book.recalc_all()
+    assert book.get_value(s, 3, 2) == 2 and book.get_value(s, 4, 2) is None
+    assert book.get_value(s, 1, 3) == 3
+    assert not s.spill.anchors
+
+
 def test_legacy_array_formula(tmp_path):
     """Ctrl+Shift+Enter array formulas fill their fixed range and can't be changed in part."""
     wb = openpyxl.Workbook()

@@ -31,7 +31,9 @@ DATA = [
 FORMULAS = [
     "=SUM(B2:B7)", "=AVERAGE(C2:C7)", "=SUMPRODUCT(B2:B7,C2:C7)", "=MAX(B2:B7)-MIN(C2:C7)",
     '=SUMIF(E2:E7,"fruit",B2:B7)', '=SUMIFS(B2:B7,E2:E7,"veg",C2:C7,">1")', '=COUNTIF(A2:A7,"*an*")',
-    '=COUNTIFS(E2:E7,"fruit",B2:B7,">2")', '=AVERAGEIF(E2:E7,"veg",C2:C7)', "=COUNTA(A1:E7)", "=COUNTBLANK(A1:F8)",
+    '=COUNTIFS(E2:E7,"fruit",B2:B7,">2")', '=AVERAGEIF(E2:E7,"veg",C2:C7)',
+    '=SUMPRODUCT(SUMIF(E2:E7,{"fruit","veg"},B2:B7)*{1,10})',
+    '=SUMPRODUCT(COUNTIFS(E2:E7,{"fruit";"veg"},B2:B7,{">2",">5"})*{1,10;100,1000})', "=COUNTA(A1:E7)", "=COUNTBLANK(A1:F8)",
     '=VLOOKUP("carrot",A2:C7,3,FALSE)', "=INDEX(A2:A7,MATCH(MAX(B2:B7),B2:B7,0))", "=MATCH(7,B2:B7,0)",
     '=HLOOKUP("Price",A1:E7,4,FALSE)', "=ROUND(AVERAGE(C2:C7),3)", "=ROUNDUP(2.341,1)", "=ROUNDDOWN(-2.349,2)",
     "=MOD(-7,3)", "=INT(-3.2)", "=TRUNC(-3.7)", "=CEILING(7.3,2)", "=FLOOR(7.3,2)", "=MROUND(17,5)",

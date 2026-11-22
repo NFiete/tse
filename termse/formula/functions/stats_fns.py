@@ -11,7 +11,7 @@ from ..registry import flatten, fn, numbers, scalar_arg, to_array
 from ..values import (
     MISSING, Array, RefValue, compare, is_number, parse_number_text, to_bool, to_int, to_number,
 )
-from .math_fns import _cells_matching, _matching_values, _pairs, criteria_pairs
+from .math_fns import _cells_matching, _matching_values, _pairs, criteria_pairs, lifts_criteria
 
 
 @fn("AVERAGE", kind="raw", min_args=1)
@@ -68,11 +68,13 @@ def COUNTBLANK(ctx, rng):
 
 
 @fn("COUNTIF", kind="raw", min_args=2, max_args=2)
+@lifts_criteria(1)
 def COUNTIF(ctx, rng, crit):
     return COUNTIFS(ctx, rng, crit)
 
 
 @fn("COUNTIFS", kind="raw", min_args=2)
+@lifts_criteria(1)
 def COUNTIFS(ctx, *args):
     pairs = _pairs(args)
     crit = criteria_pairs(ctx, pairs)
@@ -88,6 +90,7 @@ def COUNTIFS(ctx, *args):
 
 
 @fn("AVERAGEIF", kind="raw", min_args=2, max_args=3)
+@lifts_criteria(1)
 def AVERAGEIF(ctx, rng, crit, avg_range=MISSING):
     vals = [v for v in _matching_values(ctx, rng if avg_range is MISSING else avg_range, [(rng, crit)])
             if is_number(v)]
@@ -97,6 +100,7 @@ def AVERAGEIF(ctx, rng, crit, avg_range=MISSING):
 
 
 @fn("AVERAGEIFS", kind="raw", min_args=3)
+@lifts_criteria(2)
 def AVERAGEIFS(ctx, avg_range, *args):
     vals = [v for v in _matching_values(ctx, avg_range, _pairs(args)) if is_number(v)]
     if not vals:
@@ -129,12 +133,14 @@ def MINA(ctx, *args):
 
 
 @fn("MAXIFS", kind="raw", min_args=3)
+@lifts_criteria(2)
 def MAXIFS(ctx, rng, *args):
     vals = [v for v in _matching_values(ctx, rng, _pairs(args)) if is_number(v)]
     return max(vals) if vals else 0
 
 
 @fn("MINIFS", kind="raw", min_args=3)
+@lifts_criteria(2)
 def MINIFS(ctx, rng, *args):
     vals = [v for v in _matching_values(ctx, rng, _pairs(args)) if is_number(v)]
     return min(vals) if vals else 0

@@ -62,6 +62,32 @@ def test_criteria_functions(ev):
     assert ev('=COUNTIF(C1:C5,"")') == 5
 
 
+def test_criteria_functions_lift_over_array_criteria(ws):
+    """Array or multi-cell criteria give one result per criteria element, like Excel."""
+    for i, (region, amount) in enumerate([("East", 10), ("West", 5), ("East", 7), ("North", 3),
+                                          ("West", 1)], 1):
+        ws[f"A{i}"] = region
+        ws[f"B{i}"] = amount
+    ws["D1"] = '=SUMIFS(B1:B5,A1:A5,{"East";"West";"South"})'
+    assert [ws[f"D{r}"] for r in (1, 2, 3)] == [17, 6, 0]
+    ws["E1"] = "=SUMIF(A1:A5,UNIQUE(A1:A5),B1:B5)"
+    assert [ws[f"E{r}"] for r in (1, 2, 3, 4)] == [17, 6, 3, None]
+    ws["F1"] = "=COUNTIF(A1:A5,A1:A5)"  # a multi-cell criteria range spills too
+    assert [ws[f"F{r}"] for r in range(1, 6)] == [2, 2, 2, 1, 2]
+    ws["G1"] = '=COUNTIFS(A1:A5,"East",B1:B5,{">5",">8"})'  # row vector spills right
+    assert (ws["G1"], ws["H1"]) == (2, 1)
+    ws["G3"] = '=AVERAGEIFS(B1:B5,A1:A5,{"East","South"})'  # no match -> #DIV/0! for that element
+    assert ws["G3"] == 8.5 and ws["H3"].code == "#DIV/0!"
+    ws["G5"] = '=MAXIFS(B1:B5,A1:A5,{"East";"West"},B1:B5,{"<9","<9"})'  # broadcast to 2x2
+    assert [[ws[f"{c}{r}"] for c in "GH"] for r in (5, 6)] == [[7, 7], [5, 5]]
+    ws["J1"] = '=MINIFS(B1:B5,A1:A5,{"East";"West";"North"},B1:B5,{">1";">2"})'  # 3 vs 2 rows
+    assert [ws[f"J{r}"] for r in (1, 2, 3)] == [7, 5, NA]
+    ws["K1"] = '=SUM(COUNTIF(A1:A5,{"East","North"}))'
+    assert ws["K1"] == 3 and ws["L1"] is None
+    ws["K2"] = '=AVERAGEIF(A1:A5,{"West"},B1:B5)'  # 1x1 array is just a scalar
+    assert ws["K2"] == 3
+
+
 def test_lookups(ev):
     cells = {"A1": "id", "B1": "name", "A2": "10", "B2": "ten", "A3": "20", "B3": "twenty", "A4": "30",
              "B4": "thirty"}

@@ -5,7 +5,7 @@ import math
 import random
 from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, ROUND_HALF_UP, ROUND_UP, Decimal
 
-from ..errors import DIV0, NUM, VALUE, ExcelError, XLError
+from ..errors import DIV0, NA, NUM, VALUE, ExcelError, XLError
 from ..registry import flatten, fn, make_criterion, numbers, to_array
 from ..values import MISSING, Array, RefValue, is_number, to_int, to_number
 
@@ -364,6 +364,57 @@ def SUMPRODUCT(ctx, *args):
     return int(total) if all_int and total.is_integer() else total
 
 
+def lifts_criteria(first: int):
+    """Decorator for the *IF/*IFS functions: Excel maps them over array criteria, e.g.
+    SUMIFS(sales, region, {"East","West"}) or COUNTIF(A:A, UNIQUE(A:A)) returns one result per
+    criteria element. Criteria are the args at index first, first+2, ... (ranges sit in between).
+    Multi-cell criteria ranges lift too, except in legacy formulas, where they keep their
+    implicit-intersection behaviour; array constants lift in both (SUM(COUNTIF(r,{"a","b"})))."""
+    import functools
+
+    def deco(impl):
+        @functools.wraps(impl)
+        def wrapper(ctx, *args):
+            multi = []
+            for k in range(first, len(args), 2):
+                a = args[k]
+                if isinstance(a, Array):
+                    if a.nrows * a.ncols != 1:
+                        multi.append(k)
+                elif isinstance(a, RefValue) and not a.is_cell and not ctx.legacy:
+                    multi.append(k)
+            if not multi:
+                return impl(ctx, *args)
+            arrs = [(k, to_array(ctx, args[k])) for k in multi]
+            nr = max(a.nrows for _, a in arrs)
+            nc = max(a.ncols for _, a in arrs)
+            rows = []
+            for i in range(nr):
+                row = []
+                for j in range(nc):
+                    el = list(args)
+                    for k, a in arrs:
+                        ii = 0 if a.nrows == 1 else i
+                        jj = 0 if a.ncols == 1 else j
+                        if ii >= a.nrows or jj >= a.ncols:
+                            el = None  # shapes don't broadcast here
+                            break
+                        el[k] = a.rows[ii][jj]
+                    if el is None:
+                        row.append(NA)
+                        continue
+                    try:
+                        row.append(impl(ctx, *el))
+                    except XLError as e:
+                        row.append(e.err)
+                rows.append(row)
+            return Array(rows)
+
+        return wrapper
+
+    return deco
+
+
 def criteria_pairs(ctx, pairs):
     """[(range, criteria), ...] -> list of (Array, predicate) with equal shapes."""
     out = []
@@ -422,6 +473,7 @@ def _matching_values(ctx, value_range, pairs):
 
 
 @fn("SUMIF", kind="raw", min_args=2, max_args=3)
+@lifts_criteria(1)
 def SUMIF(ctx, rng, crit, sum_range=MISSING):
     vals = _matching_values(ctx, rng if sum_range is MISSING else sum_range, [(rng, crit)])
     return _sum([v for v in vals if is_number(v)])
@@ -434,6 +486,7 @@ def _pairs(args):
 
 
 @fn("SUMIFS", kind="raw", min_args=3)
+@lifts_criteria(2)
 def SUMIFS(ctx, sum_range, *args):
     vals = _matching_values(ctx, sum_range, _pairs(args))
     return _sum([v for v in vals if is_number(v)])
