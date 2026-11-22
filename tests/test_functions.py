@@ -105,6 +105,12 @@ def test_lookups(ev):
     assert ev("=HLOOKUP(\"name\",A1:B4,3,FALSE)") == "twenty"
     assert ev("=MATCH(30,A2:A4,0)") == 3
     assert ev("=MATCH(25,A2:A4)") == 2
+    # An empty argument is FALSE / 0 (exact match), unlike an omitted one
+    assert ev("=VLOOKUP(25,A2:B4,2,)") == NA
+    assert ev("=VLOOKUP(20,A2:B4,2,)") == "twenty"
+    assert ev('=HLOOKUP("nam",A1:B4,2,)') == NA
+    assert ev("=MATCH(25,A2:A4,)") == NA
+    assert ev("=MATCH(20,A2:A4,)") == 2
     assert ev("=INDEX(B2:B4,3)") == "thirty"
     assert ev("=INDEX(A1:B4,2,2)") == "ten"
     assert ev("=SUM(INDEX(A2:B4,0,1))") == 60

@@ -7,6 +7,11 @@ from ..registry import fn, lookup_equal, scalar_arg, shaped_array, to_array, to_
 from ..values import MISSING, Array, RefValue, compare, to_bool, to_int, to_number, to_text, type_rank
 
 
+# Default for arguments whose default isn't what an empty argument means: VLOOKUP(x,t,2) is an
+# approximate match, but VLOOKUP(x,t,2,) passes an empty (FALSE) range_lookup.
+_OMITTED = object()
+
+
 def _approx_index(keys, x, descending=False):
     """Index of the last key <= x (or for descending, last key >= x) among comparable keys."""
     best = None
@@ -51,7 +56,7 @@ def _arr_get(arr: Array, i, j):
 
 
 @fn("VLOOKUP", kind="raw", min_args=3, max_args=4)
-def VLOOKUP(ctx, x, table, col, approx=MISSING):
+def VLOOKUP(ctx, x, table, col, approx=_OMITTED):
     x = _lookup_value(ctx, x)
     arr = to_array(ctx, table)
     _, ncols = _table_shape(table, arr)
@@ -60,7 +65,7 @@ def VLOOKUP(ctx, x, table, col, approx=MISSING):
         raise XLError(VALUE)
     if col > ncols:
         raise XLError(REF)
-    approx = True if approx is MISSING else to_bool(scalar_arg(ctx, approx) or False)
+    approx = True if approx is _OMITTED else to_bool(scalar_arg(ctx, approx) or False)
     keys = [r[0] if r else None for r in arr.rows]
     i = _approx_index(keys, x) if approx else _exact_index(keys, x)
     if i is None:
@@ -70,7 +75,7 @@ def VLOOKUP(ctx, x, table, col, approx=MISSING):
 
 
 @fn("HLOOKUP", kind="raw", min_args=3, max_args=4)
-def HLOOKUP(ctx, x, table, row, approx=MISSING):
+def HLOOKUP(ctx, x, table, row, approx=_OMITTED):
     x = _lookup_value(ctx, x)
     arr = to_array(ctx, table)
     nrows, _ = _table_shape(table, arr)
@@ -79,7 +84,7 @@ def HLOOKUP(ctx, x, table, row, approx=MISSING):
         raise XLError(VALUE)
     if row > nrows:
         raise XLError(REF)
-    approx = True if approx is MISSING else to_bool(scalar_arg(ctx, approx) or False)
+    approx = True if approx is _OMITTED else to_bool(scalar_arg(ctx, approx) or False)
     keys = arr.rows[0] if arr.rows else []
     i = _approx_index(keys, x) if approx else _exact_index(keys, x)
     if i is None:
@@ -98,10 +103,10 @@ def _vector(ctx, v) -> list:
 
 
 @fn("MATCH", kind="raw", min_args=2, max_args=3)
-def MATCH(ctx, x, arr, mtype=MISSING):
+def MATCH(ctx, x, arr, mtype=_OMITTED):
     x = _lookup_value(ctx, x)
     keys = _vector(ctx, arr)
-    mt = 1 if mtype is MISSING else to_int(scalar_arg(ctx, mtype) or 0)
+    mt = 1 if mtype is _OMITTED else to_int(scalar_arg(ctx, mtype) or 0)
     if mt == 0:
         i = _exact_index(keys, x)
     elif mt > 0:
