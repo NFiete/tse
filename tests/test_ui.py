@@ -363,3 +363,35 @@ async def test_goto_sheet_picker(tmp_path):
         await pilot.pause(0.1)
         assert app.grid.sheet.name == "Sheet12"
         assert app.grid.sheet.ws.sheet_state == "visible"
+
+
+@pytest.mark.asyncio
+async def test_save_as_csv_asks_and_failed_save_keeps_path(tmp_path):
+    app = TermSEApp()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _ready(app, pilot)
+        await type_text(pilot, "=1+1")
+        await pilot.press("enter")
+        csv_path = str(tmp_path / "out.csv")
+        app.action_save_as(default=csv_path)
+        await pilot.pause(0.05)
+        await pilot.press("enter")  # accept the file name
+        await pilot.pause(0.05)
+        assert isinstance(app.screen, ChoiceDialog)  # "CSV keeps only the current sheet..."
+        await pilot.press("escape")
+        await pilot.pause(0.05)
+        assert app.book.path is None
+        assert not (tmp_path / "out.csv").exists()
+        app.action_save_as(default=str(tmp_path / "missing" / "dir" / "out.xlsx"))
+        await pilot.pause(0.05)
+        await pilot.press("enter")
+        await pilot.pause(0.05)
+        assert app.book.path is None  # the save failed
+        app.action_save_as(default=csv_path)
+        await pilot.pause(0.05)
+        await pilot.press("enter")
+        await pilot.pause(0.05)
+        await pilot.press("enter")  # Save CSV
+        await pilot.pause(0.05)
+        assert app.book.path == csv_path
+        assert (tmp_path / "out.csv").read_text().strip() == "2"

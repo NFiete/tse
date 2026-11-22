@@ -1783,7 +1783,8 @@ class TermSEApp(App):
             return
         self._save_to(book.path)
 
-    def _save_to(self, path: str, confirmed: bool = False):
+    def _save_to(self, path: str, confirmed: bool = False, then=None):
+        """Save to path, asking first when that loses something; then() runs after a successful save."""
         book = self.book
         ext = os.path.splitext(path)[1].lower()
         same_file = book.path is not None and os.path.abspath(path) == os.path.abspath(book.path)
@@ -1791,7 +1792,7 @@ class TermSEApp(App):
             def done(choice):
                 if choice == "overwrite":
                     self.ack_warnings.add(path)
-                    self._save_to(path, confirmed=True)
+                    self._save_to(path, confirmed=True, then=then)
                 elif choice == "copy":
                     base, e = os.path.splitext(path)
                     self.action_save_as(default=base + " (tse)" + (e if e in xlsx.EXCEL_EXTS else ".xlsx"))
@@ -1804,7 +1805,7 @@ class TermSEApp(App):
         if not confirmed and ext in xlsx.TEXT_EXTS and (len(book.sheets) > 1 or any(s.formulas for s in book.sheets)):
             def done(choice):
                 if choice == "ok":
-                    self._save_to(path, confirmed=True)
+                    self._save_to(path, confirmed=True, then=then)
 
             self.push_screen(ChoiceDialog(
                 "Save as CSV", "CSV keeps only the current sheet's displayed values — formulas, formatting and "
@@ -1821,6 +1822,8 @@ class TermSEApp(App):
         self.sub_title = os.path.basename(path)
         self.set_message(f"Saved {path}")
         self.after_change()
+        if then is not None:
+            then()
 
     def action_save_as(self, default: str | None = None):
         if self.editing is not None and not self.commit_edit(move=None):
@@ -1838,19 +1841,21 @@ class TermSEApp(App):
             if os.path.isdir(path):
                 self.notify("That's a folder", severity="error")
                 return
+            original = book.path
+
+            def saved():
+                if path != original:
+                    book.warnings = []  # they were about the file we loaded, which is untouched
+
             if os.path.exists(path) and path != book.path:
                 def ok(choice):
                     if choice == "yes":
-                        self._save_to(path, confirmed=True)
-                        book.warnings = []
+                        self._save_to(path, then=saved)
 
                 self.push_screen(ChoiceDialog("Replace file?", f"{path} already exists. Replace it?",
                                               [("yes", "&Replace"), ("no", "Cancel")], default="no"), ok)
                 return
-            self._save_to(path, confirmed=True)
-            if path != book.path:
-                book.warnings = []
-            book.path = path
+            self._save_to(path, then=saved)
 
         self.push_screen(InputDialog("Save as", "File name (.xlsx, .xlsm or .csv) — Tab completes paths:",
                                      default, path=True), done)
