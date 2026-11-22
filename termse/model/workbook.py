@@ -13,6 +13,7 @@ from copy import copy
 
 from openpyxl.cell.cell import MergedCell
 from openpyxl.styles.cell_style import StyleArray
+from openpyxl.utils.exceptions import IllegalCharacterError
 from openpyxl.utils.datetime import MAC_EPOCH
 from openpyxl.worksheet.formula import ArrayFormula
 
@@ -1036,7 +1037,12 @@ class Workbook:
         cell = existing if existing is not None else sheet.ws.cell(row=r, column=c)
         if self.legacy:
             self.legacy.discard(id(cell))
-        cell.value = value
+        try:
+            cell.value = value
+        except IllegalCharacterError:
+            # Control characters (e.g. from CHAR(7)): openpyxl refuses them, Excel doesn't.
+            # They're escaped when the file is saved.
+            cell._value, cell.data_type = value, "s"
         if data_type is not None:
             cell.data_type = data_type
         if cell.data_type == "f":

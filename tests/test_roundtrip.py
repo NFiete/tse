@@ -134,3 +134,27 @@ def test_detect_unpreservable(tmp_path, sample_path):
             zout.writestr(item, zin.read(item.filename))
         zout.writestr("xl/slicers/slicer1.xml", "<x/>")
     assert "slicers" in xlsx.detect_unpreservable(p)
+
+
+def test_control_characters_save(tmp_path):
+    """Text with control characters (formula results, pasted values, spills) can be saved;
+    the file spells them _x0007_ as Excel does."""
+    from termse.model.refs import Rect
+
+    book = xlsx.new_workbook()
+    s = book.sheets[0]
+    book.set_input(s, 1, 1, "=CHAR(7)")
+    book.set_input(s, 1, 2, '="a"&CHAR(1)&SEQUENCE(2)')
+    book.paste(book.capture(s, Rect(1, 1, 1, 1)), s, 3, 1, values_only=True)
+    book.paste_text(s, 4, 1, "x\x07y")
+    assert book.get_value(s, 3, 1) == "\x07"
+    assert book.get_value(s, 4, 1) == "x\x07y"
+    path = str(tmp_path / "ctrl.xlsx")
+    xlsx.save(book, path)
+    assert book.get_value(s, 4, 1) == "x\x07y"  # the escaping is only in the file
+    ws = openpyxl.load_workbook(path).active
+    assert ws["A3"].value == "_x0007_"
+    assert ws["A4"].value == "x_x0007_y"
+    assert ws["B2"].value == "a_x0001_2"
+    with zipfile.ZipFile(path) as z:
+        assert b"<v>_x0007_</v>" in z.read("xl/worksheets/sheet1.xml")

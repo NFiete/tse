@@ -351,6 +351,16 @@ def _sheet_parts(z: zipfile.ZipFile) -> dict[str, str]:
 
 _CELL_RE = re.compile(r"^([A-Z]+)(\d+)$")
 
+# Characters XML can't hold. Spreadsheet files spell them _xHHHH_ (CHAR(7) is _x0007_).
+_XML_ILLEGAL_RE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff\ud800-\udfff]")
+
+
+def xml_safe(text: str) -> str:
+    """Escape characters XML can't contain the way the xlsx format does (_x0007_)."""
+    if not _XML_ILLEGAL_RE.search(text):
+        return text
+    return _XML_ILLEGAL_RE.sub(lambda m: f"_x{ord(m.group()):04X}_", text)
+
 
 def _set_plain(cell, v):
     if isinstance(v, ExcelError):
@@ -360,14 +370,15 @@ def _set_plain(cell, v):
     elif isinstance(v, (int, float)):
         cell._value, cell.data_type = v, "n"
     else:
-        cell._value, cell.data_type = str(v), "s"
+        cell._value, cell.data_type = xml_safe(str(v)), "s"
 
 
 def _materialize_arrays(book: Workbook):
     """Temporarily put spilling formulas and their results into the openpyxl cells the way Excel
     stores them: the formula cell holds an array formula over the spill range, and the other
-    cells hold the values. Returns (undo list for _restore_cells, {sheet name: {anchor address}}
-    of dynamic-array formulas, which _inject_cached_values marks with cm="1")."""
+    cells hold the values. Text with characters XML can't hold is escaped. Returns (undo list
+    for _restore_cells, {sheet name: {anchor address}} of dynamic-array formulas, which
+    _inject_cached_values marks with cm="1")."""
     from openpyxl.worksheet.formula import ArrayFormula
 
     from ..model.refs import addr
@@ -378,6 +389,11 @@ def _materialize_arrays(book: Workbook):
         ws = s.ws
         cells = ws._cells
         sp = s.spill
+        for rc, cell in cells.items():
+            v = cell._value
+            if type(v) is str and cell.data_type != "f" and _XML_ILLEGAL_RE.search(v):
+                restore.append((ws, rc, cell, v, cell.data_type))
+                cell._value = xml_safe(v)
         for (r, c), f in s.formulas.items():
             if f.legacy or f.array:
                 continue
@@ -514,7 +530,7 @@ def _inject_cached_values(path: str, book: Workbook, dynamic: dict | None = None
                     v.text = repr(float(val)) if isinstance(val, float) else str(val)
                 elif isinstance(val, str):
                     c.set("t", "str")
-                    v.text = val
+                    v.text = xml_safe(val)
                 else:
                     c.remove(v)
                     continue
