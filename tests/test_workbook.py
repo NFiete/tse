@@ -104,6 +104,16 @@ def test_cut_paste_moves_references(ws):
     assert ws.text("C1") == "=A5+1" and ws["C1"] == 4
 
 
+def test_paste_values_onto_overlapping_range(ws):
+    ws["A1"] = "=1"
+    ws["A2"] = "=2"
+    ws["A3"] = "=3"
+    book, sheet = ws.book, ws.sheet
+    book.paste(book.capture(sheet, Rect(1, 1, 3, 1)), sheet, 2, 1, values_only=True)
+    assert [ws[f"A{r}"] for r in range(1, 5)] == [1, 1, 2, 3]
+    assert ws.text("A3") == "2"
+
+
 def test_fill_down(ws):
     b = ws.book
     for i in range(1, 5):

@@ -1258,8 +1258,15 @@ class Workbook:
         if dest.r2 > MAX_ROW or dest.c2 > MAX_COL:
             raise ValueError("Paste area extends beyond the sheet")
         same_wb = clip["sheet"].book is self
+        src_sheet: Sheet = clip["sheet"]
+        results = {}
+        if values_only:
+            # Read the copied formulas' results before writing: the paste may overwrite them.
+            get = src_sheet.book.get_value
+            results = {(dr, dc): get(src_sheet, src.r1 + dr, src.c1 + dc)
+                       for (dr, dc), data in clip["cells"].items()
+                       if data[1] == "f" and isinstance(data[0], (str, ArrayFormula))}
         with self.transaction("Cut" if cut else "Paste", (sheet.name, dest)):
-            src_sheet: Sheet = clip["sheet"]
             if cut and src_sheet.book is self:
                 for (dr, dc) in clip["cells"]:
                     r, c = src.r1 + dr, src.c1 + dc
@@ -1293,7 +1300,7 @@ class Workbook:
                             if dtype == "f" and isinstance(value, (str, ArrayFormula)):
                                 text = _formula_text(value)
                                 if values_only:
-                                    v = self.get_value(src_sheet, src.r1 + dr, src.c1 + dc)
+                                    v = results[(dr, dc)]
                                     if isinstance(v, ExcelError):
                                         self.set_raw(sheet, r, c, v.code, "e")
                                     else:
