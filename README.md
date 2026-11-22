@@ -1,6 +1,7 @@
 # tse
 
-tse (terminal spreadsheet editor) is a spreadsheet for the terminal that opens, edits and saves real Excel files.
+tse (terminal spreadsheet editor) is a spreadsheet for the terminal that is
+mostly compatible with excel.
 
 ```
 ./tse budget.xlsx          # open a workbook
@@ -114,3 +115,7 @@ python3 -m pytest
 `tests/test_libreoffice.py` recalculates about 150 formulas with LibreOffice (`soffice`) and
 compares the results with tse's. It's skipped if LibreOffice isn't installed.
 `tests/fixtures/make_sample.py` builds the demo workbook `tests/fixtures/sample.xlsx`.
+
+## License
+
+tse is licensed under the [Mozilla Public License 2.0](LICENSE).
