@@ -158,3 +158,58 @@ def test_control_characters_save(tmp_path):
     assert ws["B2"].value == "a_x0001_2"
     with zipfile.ZipFile(path) as z:
         assert b"<v>_x0007_</v>" in z.read("xl/worksheets/sheet1.xml")
+
+
+def test_sheet_settings_follow_inserted_and_deleted_rows(tmp_path):
+    """Auto-filter, validation and conditional-format formulas and print titles/area move with
+    inserted rows/columns, and undoing a deletion brings them back."""
+    from openpyxl.formatting.rule import FormulaRule
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    from termse.model import structure
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "S"
+    for r in range(1, 6):
+        ws.cell(r, 1, r)
+    ws.auto_filter.ref = "A1:A5"
+    dv = DataValidation(type="list", formula1="$C$1:$C$3")
+    dv.add("B2:B5")
+    ws.add_data_validation(dv)
+    ws.conditional_formatting.add("A1:A5", FormulaRule(formula=["$A1>$D$1"]))
+    ws.print_title_rows = "1:1"
+    ws.print_title_cols = "A:A"
+    ws.print_area = "A1:D10"
+    other = wb.create_sheet("O")
+    dv2 = DataValidation(type="list", formula1="S!$C$1:$C$3")
+    dv2.add("A1")
+    other.add_data_validation(dv2)
+    p = str(tmp_path / "settings.xlsx")
+    wb.save(p)
+
+    book = xlsx.load(p)
+    s, o = book.sheets
+    w = s.ws
+
+    def state():
+        cf = [(str(c.sqref), r.formula) for c in w.conditional_formatting for r in c.rules]
+        return (w.auto_filter.ref, w.data_validations.dataValidation[0].formula1, cf, w.print_title_rows,
+                w.print_title_cols, w.print_area, o.ws.data_validations.dataValidation[0].formula1)
+
+    before = state()
+    structure.insert(book, s, "row", 1, 2)
+    assert state() == ("A3:A7", "$C$3:$C$5", [("A3:A7", ["$A3>$D$3"])], "$3:$3", "$A:$A",
+                       "'S'!$A$3:$D$12", "S!$C$3:$C$5")
+    xlsx.save(book, p)
+    saved = openpyxl.load_workbook(p)["S"]
+    assert saved.auto_filter.ref == "A3:A7" and saved.print_title_rows == "$3:$3"
+    book.do_undo()
+    assert state() == before
+    structure.insert(book, s, "col", 1, 1)
+    assert state()[:2] == ("B1:B5", "$D$1:$D$3") and state()[3:5] == ("$1:$1", "$B:$B")
+    book.do_undo()
+    structure.delete(book, s, "row", 1, 3)
+    assert state()[1] == "#REF!" and state()[3] is None
+    book.do_undo()
+    assert state() == before

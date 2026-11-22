@@ -354,6 +354,73 @@ def _shift_misc(sheet, axis: str, idx: int, n: int):
                         f"{col_letter(max(res[0], 1))}{r}"
 
 
+def _shift_sheet_settings(book, target_sheet, axis: str, f):
+    """References outside cells: data-validation and conditional-format formulas on every sheet
+    (they may point at the target sheet), and the target sheet's auto-filter, print titles and
+    print area. (The ranges validations and formats apply to are moved by _shift_misc.)"""
+
+    def tf(text, s):
+        return _transform_formula("=" + text, s, target_sheet, book, axis, f)[1:]
+
+    for s in book.sheets:
+        ws = s.ws
+        for dv in ws.data_validations.dataValidation:
+            if dv.formula1:
+                dv.formula1 = tf(dv.formula1, s)
+            if dv.formula2:
+                dv.formula2 = tf(dv.formula2, s)
+        for rules in ws.conditional_formatting._cf_rules.values():
+            for rule in rules:
+                if rule.formula:
+                    rule.formula = [tf(x, s) for x in rule.formula]
+    ws = target_sheet.ws
+    af = ws.auto_filter
+    if af.ref:
+        new = _shift_multicell(MultiCellRange(af.ref), axis, f)
+        af.ref = next(iter(new.ranges)).coord if new.ranges else None
+    if ws._print_area:
+        new = _shift_multicell(ws._print_area, axis, f)
+        ws.print_area = [r.coord for r in new.ranges] or None
+    if axis == "row" and ws._print_rows:
+        res = f(int(ws._print_rows.min_row), int(ws._print_rows.max_row))
+        _set_print_titles(ws, None if res is None else f"{res[0]}:{res[1]}", ws.print_title_cols)
+    elif axis == "col" and ws._print_cols:
+        res = f(col_index(ws._print_cols.min_col), col_index(ws._print_cols.max_col))
+        _set_print_titles(ws, ws.print_title_rows,
+                          None if res is None else f"{col_letter(res[0])}:{col_letter(res[1])}")
+
+
+def _set_print_titles(ws, rows: str | None, cols: str | None):
+    # openpyxl's setters ignore None, so they can't remove titles
+    from openpyxl.worksheet.print_settings import ColRange, RowRange
+
+    ws._print_rows = RowRange(rows.replace("$", "")) if rows else None
+    ws._print_cols = ColRange(cols.replace("$", "")) if cols else None
+
+
+def _settings_state(book) -> dict:
+    """Snapshot of what _shift_sheet_settings and _shift_misc change, for undoing a deletion."""
+    from copy import deepcopy
+
+    out = {}
+    for s in book.sheets:
+        ws = s.ws
+        out[s] = (deepcopy(ws.data_validations.dataValidation), deepcopy(ws.conditional_formatting._cf_rules),
+                  ws.auto_filter.ref, [r.coord for r in ws._print_area.ranges] if ws._print_area else None,
+                  ws.print_title_rows, ws.print_title_cols)
+    return out
+
+
+def _restore_settings(book, state: dict):
+    for s, (dvs, cfs, af, area, rows, cols) in state.items():
+        ws = s.ws
+        ws.data_validations.dataValidation = dvs
+        ws.conditional_formatting._cf_rules = cfs
+        ws.auto_filter.ref = af
+        ws.print_area = area
+        _set_print_titles(ws, rows, cols)
+
+
 def _affected(refs, target_sheet, axis: str, idx: int) -> bool:
     """Could a formula with these (resolved) refs need rewriting for a change at idx?"""
     if axis == "row":
@@ -514,6 +581,7 @@ def _apply_inner(book, sheet, axis: str, idx: int, n: int, table_fill: bool = Tr
         _copy_formats(sheet, axis, idx - 1, idx, n)
     _shift_merged(sheet, axis, idx, n)
     _shift_misc(sheet, axis, idx, n)
+    _shift_sheet_settings(book, sheet, axis, f)
     new_formulas = tables.shift(book, sheet, axis, idx, n, fill=table_fill)
     changed_post = _reindex(book, sheet, axis, idx, n, changed_pre, names_changed)
     book._pending_tokens = {}
@@ -566,6 +634,7 @@ def delete(book, sheet, axis: str, idx: int, n: int = 1, record: bool = True):
         tables.check_delete(book, sheet, axis, idx, n)
     old_tables = tables.snapshot(sheet)
     old_merged = [mr.coord for mr in sheet.ws.merged_cells.ranges]
+    old_settings = _settings_state(book) if record else None
     # Only references that were cut (not merely shifted) need restoring on undo:
     # re-inserting the rows shifts everything else back exactly.
     old_texts, deleted, removed_dims = _apply(book, sheet, axis, idx, -n)
@@ -577,6 +646,7 @@ def delete(book, sheet, axis: str, idx: int, n: int = 1, record: bool = True):
 
         insert(book, sheet, axis, idx, n, record=False, table_fill=False)
         tables.restore(book, sheet, old_tables)
+        _restore_settings(book, old_settings)
         ws = sheet.ws
         restored = set()
         for (r, c), (value, dtype, style) in deleted.items():
