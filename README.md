@@ -18,6 +18,10 @@ tse --vi budget.xlsx     # vi-style keys
 - Reasonably fast
 - Runs in the terminal
 
+## Screenshot
+
+![Demo image so there is a picture of the app](screenshots/table.webp)
+
 ## License
 
 [Mozilla Public License 2.0](LICENSE)
