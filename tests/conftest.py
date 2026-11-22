@@ -6,8 +6,8 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from termxl.io.xlsx import new_workbook  # noqa: E402
-from termxl.model.refs import parse_addr  # noqa: E402
+from termse.io.xlsx import new_workbook  # noqa: E402
+from termse.model.refs import parse_addr  # noqa: E402
 
 
 class Sheetish:
@@ -36,7 +36,7 @@ class Sheetish:
 
 @pytest.fixture(autouse=True)
 def _isolated_settings(tmp_path_factory, monkeypatch):
-    """Never read or write the real ~/.config/term_xl/settings.json from tests."""
+    """Never read or write the real ~/.config/tse/settings.json from tests."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("config")))
 
 

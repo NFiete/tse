@@ -8,11 +8,11 @@ import openpyxl
 import pytest
 from openpyxl.worksheet.table import Table, TableColumn, TableFormula
 
-from termxl.formula.errors import ExcelError
-from termxl.formula.parser import FormulaSyntaxError, StructRef, parse, sref_text, to_display, to_storage
-from termxl.io import xlsx
-from termxl.model import names, structure, tables
-from termxl.model.refs import Rect, parse_addr
+from termse.formula.errors import ExcelError
+from termse.formula.parser import FormulaSyntaxError, StructRef, parse, sref_text, to_display, to_storage
+from termse.io import xlsx
+from termse.model import names, structure, tables
+from termse.model.refs import Rect, parse_addr
 
 from .conftest import Sheetish
 
@@ -498,12 +498,12 @@ def test_parse_storage_render_matches_excel_spelling():
 
 @pytest.mark.asyncio
 async def test_ui_create_and_edit_table():
-    from termxl.ui.app import TermXLApp
-    from termxl.ui.dialogs import TableDialog
+    from termse.ui.app import TermSEApp
+    from termse.ui.dialogs import TableDialog
 
     from .test_ui import _ready, type_text
 
-    app = TermXLApp()
+    app = TermSEApp()
     async with app.run_test(size=(110, 32)) as pilot:
         await _ready(app, pilot)
         book, sheet = app.book, app.grid.sheet

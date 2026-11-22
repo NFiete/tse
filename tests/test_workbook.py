@@ -1,6 +1,6 @@
-from termxl.formula.errors import CIRC, REF
-from termxl.model import structure
-from termxl.model.refs import Rect
+from termse.formula.errors import CIRC, REF
+from termse.model import structure
+from termse.model.refs import Rect
 
 
 def test_recalc_chain(ws):

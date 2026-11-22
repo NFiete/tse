@@ -2,12 +2,12 @@
 Most simple cases are also cross-checked against LibreOffice in test_libreoffice.py."""
 import pytest
 
-from termxl.formula.errors import ExcelError
-from termxl.formula.evaluator import Ctx, evaluate
-from termxl.formula.parser import to_display, to_storage
-from termxl.formula.values import Array, RefValue
-from termxl.io import xlsx
-from termxl.model.refs import parse_addr
+from termse.formula.errors import ExcelError
+from termse.formula.evaluator import Ctx, evaluate
+from termse.formula.parser import to_display, to_storage
+from termse.formula.values import Array, RefValue
+from termse.io import xlsx
+from termse.model.refs import parse_addr
 
 SALES = [
     ["Region", "Product", "Sales"],

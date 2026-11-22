@@ -353,7 +353,7 @@ class HelpScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label("term_xl — keyboard reference", classes="title")
+            yield Label("tse — keyboard reference", classes="title")
             with VerticalScroll(id="helpbody"):
                 yield Static((VI_HELP_TEXT if self._vi else "") + HELP_TEXT)
             with Horizontal(classes="buttons"):

@@ -1,10 +1,10 @@
 import openpyxl
 import pytest
 
-from termxl.formula.errors import NAME
-from termxl.io import xlsx
-from termxl.model import names
-from termxl.model.refs import Rect
+from termse.formula.errors import NAME
+from termse.io import xlsx
+from termse.model import names
+from termse.model.refs import Rect
 
 
 @pytest.fixture
@@ -77,7 +77,7 @@ def test_delete_gives_name_error_and_undo(setup):
 def test_sheet_scope(setup):
     ws = setup
     b, s = ws.book, ws.sheet
-    from termxl.model import structure
+    from termse.model import structure
 
     other = structure.add_sheet(b, "Other")
     names.set_name(b, "Rate", "0.1", None, s)
@@ -112,7 +112,7 @@ def test_duplicate_and_bad_reference(setup):
 
 def test_names_saved_to_file(setup, tmp_path):
     b, s = setup.book, setup.sheet
-    from termxl.model import structure
+    from termse.model import structure
 
     other = structure.add_sheet(b, "Other")
     names.set_name(b, "Amounts", "A1:A3", None, s)

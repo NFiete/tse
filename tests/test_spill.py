@@ -5,11 +5,11 @@ import openpyxl
 import pytest
 from openpyxl.worksheet.formula import ArrayFormula
 
-from termxl.formula.errors import ExcelError
-from termxl.formula.parser import parse, to_display, to_storage
-from termxl.io import xlsx
-from termxl.model import structure
-from termxl.model.refs import Rect, parse_addr
+from termse.formula.errors import ExcelError
+from termse.formula.parser import parse, to_display, to_storage
+from termse.io import xlsx
+from termse.model import structure
+from termse.model.refs import Rect, parse_addr
 
 
 def col(ws, a1, n):
@@ -325,10 +325,10 @@ def test_legacy_array_formula(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ui_spilled_range():
-    from termxl.ui.app import TermXLApp
+    from termse.ui.app import TermSEApp
     from tests.test_ui import _ready, screen_text, type_text
 
-    app = TermXLApp()
+    app = TermSEApp()
     async with app.run_test(size=(100, 30)) as pilot:
         await _ready(app, pilot)
         await type_text(pilot, "=SEQUENCE(4)*7")

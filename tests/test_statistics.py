@@ -1,7 +1,7 @@
 """Statistical functions: distributions, hypothesis tests, descriptive statistics, regression."""
 import pytest
 
-from termxl.formula.errors import DIV0, NA, NUM, REF, VALUE
+from termse.formula.errors import DIV0, NA, NUM, REF, VALUE
 
 # Worked examples from Microsoft's documentation for each function.
 EXCEL_EXAMPLES = [
@@ -105,7 +105,7 @@ def test_error_cases(ev, formula, expected):
 
 
 def test_storage_prefixes():
-    from termxl.formula.parser import to_display, to_storage
+    from termse.formula.parser import to_display, to_storage
     assert to_storage("=NORM.S.DIST(1,TRUE)+T.DIST.2T(1,2)") == "=_xlfn.NORM.S.DIST(1,TRUE)+_xlfn.T.DIST.2T(1,2)"
     assert to_storage("=GAMMA(2)*GAMMALN(3)") == "=_xlfn.GAMMA(2)*GAMMALN(3)"
     assert to_storage("=NORMSDIST(1)+FORECAST(1,A1:A3,B1:B3)") == "=NORMSDIST(1)+FORECAST(1,A1:A3,B1:B3)"

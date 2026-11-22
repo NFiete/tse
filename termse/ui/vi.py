@@ -1,6 +1,6 @@
 """Vi-style keys for the grid.
 
-Turned on with `txl --vi`, "Use vi keys" in the command palette, or `:set vi`; the choice is
+Turned on with `tse --vi`, "Use vi keys" in the command palette, or `:set vi`; the choice is
 remembered in the settings file. The grid passes every key to `ViKeys.handle` first; keys it
 doesn't claim (Enter, Tab, F2, Delete, Shift/Ctrl+arrows, Alt+…, most Ctrl+… shortcuts) keep their
 Excel meaning. Editing a cell is "insert mode": Esc there confirms the edit instead of cancelling it.

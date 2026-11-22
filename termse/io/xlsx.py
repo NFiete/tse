@@ -290,7 +290,7 @@ def save(book: Workbook, path: str, active_sheet=None, cursor=None):
                 sel[0].activeCell = a
                 sel[0].sqref = a
     directory = os.path.dirname(os.path.abspath(path))
-    fd, tmp = tempfile.mkstemp(prefix=".termxl-", suffix=ext, dir=directory)
+    fd, tmp = tempfile.mkstemp(prefix=".termse-", suffix=ext, dir=directory)
     os.close(fd)
     try:
         restore, dynamic = _materialize_arrays(book)

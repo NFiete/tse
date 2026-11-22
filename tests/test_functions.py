@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from termxl.formula.errors import DIV0, NA, NAME, NUM, REF, VALUE
+from termse.formula.errors import DIV0, NA, NAME, NUM, REF, VALUE
 
 
 @pytest.mark.parametrize("formula,expected", [
@@ -179,7 +179,7 @@ def test_binom_dist(ev):
 
 
 def test_binom_dist_storage_prefix():
-    from termxl.formula.parser import to_display, to_storage
+    from termse.formula.parser import to_display, to_storage
     assert to_storage("=BINOM.DIST(1,2,0.5,FALSE)") == "=_xlfn.BINOM.DIST(1,2,0.5,FALSE)"
     assert to_storage("=BINOMDIST(1,2,0.5,FALSE)") == "=BINOMDIST(1,2,0.5,FALSE)"
     assert to_display("=_xlfn.BINOM.DIST(1,2,0.5,FALSE)") == "=BINOM.DIST(1,2,0.5,FALSE)"

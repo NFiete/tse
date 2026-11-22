@@ -1,4 +1,4 @@
-"""The term_xl Textual application."""
+"""The tse Textual application."""
 from __future__ import annotations
 
 import os
@@ -67,8 +67,8 @@ class EditState:
     discard_on_escape: bool = False  # vi keys: Esc confirms unless that already failed
 
 
-class TermXLApp(App):
-    TITLE = "term_xl"
+class TermSEApp(App):
+    TITLE = "tse"
     CSS = """
     Screen { layout: vertical; }
     #bar { height: 1; width: 1fr; }
@@ -205,7 +205,7 @@ class TermXLApp(App):
                         + ", ".join(unsupported[:12]) + ("…" if len(unsupported) > 12 else ""),
                         severity="warning", timeout=8)
         if book.warnings:
-            self.notify("This file contains things term_xl can't save back: " + "; ".join(book.warnings)
+            self.notify("This file contains things tse can't save back: " + "; ".join(book.warnings)
                         + ".\nYou'll be asked before overwriting it.", severity="warning", timeout=10)
         self.refresh_status()
 
@@ -1746,10 +1746,10 @@ class TermXLApp(App):
                     self._save_to(path, confirmed=True)
                 elif choice == "copy":
                     base, e = os.path.splitext(path)
-                    self.action_save_as(default=base + " (term_xl)" + (e if e in xlsx.EXCEL_EXTS else ".xlsx"))
+                    self.action_save_as(default=base + " (tse)" + (e if e in xlsx.EXCEL_EXTS else ".xlsx"))
 
             self.push_screen(ChoiceDialog(
-                "Save", "This file contains things term_xl can't write back:\n  • " + "\n  • ".join(book.warnings)
+                "Save", "This file contains things tse can't write back:\n  • " + "\n  • ".join(book.warnings)
                 + "\n\nOverwriting will remove them. Save a copy instead?",
                 [("copy", "Save &copy…"), ("overwrite", "&Overwrite"), ("cancel", "Cancel")], default="copy"), done)
             return

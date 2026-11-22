@@ -2,9 +2,9 @@
 import openpyxl
 import pytest
 
-from termxl.model.refs import parse_addr
-from termxl.ui.app import TermXLApp
-from termxl.ui.dialogs import ChoiceDialog, InputDialog
+from termse.model.refs import parse_addr
+from termse.ui.app import TermSEApp
+from termse.ui.dialogs import ChoiceDialog, InputDialog
 
 
 async def _ready(app, pilot):
@@ -39,7 +39,7 @@ async def type_text(pilot, text):
 @pytest.mark.asyncio
 async def test_type_values_and_formulas(tmp_path):
     path = str(tmp_path / "new.xlsx")
-    app = TermXLApp(path)
+    app = TermSEApp(path)
     async with app.run_test(size=(100, 30)) as pilot:
         await _ready(app, pilot)
         await type_text(pilot, "10")
@@ -71,7 +71,7 @@ async def test_type_values_and_formulas(tmp_path):
 
 @pytest.mark.asyncio
 async def test_point_mode_builds_references():
-    app = TermXLApp()
+    app = TermSEApp()
     async with app.run_test(size=(100, 30)) as pilot:
         await _ready(app, pilot)
         for v in ("1", "2", "3"):
@@ -89,7 +89,7 @@ async def test_point_mode_builds_references():
 
 @pytest.mark.asyncio
 async def test_arrow_commits_in_enter_mode_and_f2_edits():
-    app = TermXLApp()
+    app = TermSEApp()
     async with app.run_test(size=(100, 30)) as pilot:
         await _ready(app, pilot)
         await type_text(pilot, "hello")
@@ -111,7 +111,7 @@ async def test_arrow_commits_in_enter_mode_and_f2_edits():
 
 @pytest.mark.asyncio
 async def test_copy_paste_and_fill():
-    app = TermXLApp()
+    app = TermSEApp()
     async with app.run_test(size=(100, 30)) as pilot:
         await _ready(app, pilot)
         for v in ("1", "2", "3"):
@@ -131,7 +131,7 @@ async def test_copy_paste_and_fill():
 
 @pytest.mark.asyncio
 async def test_sample_file_navigation_and_insert_row(sample_path):
-    app = TermXLApp(sample_path)
+    app = TermSEApp(sample_path)
     async with app.run_test(size=(110, 30)) as pilot:
         await _ready(app, pilot)
         text = screen_text(app)
@@ -156,7 +156,7 @@ async def test_sample_file_navigation_and_insert_row(sample_path):
 
 @pytest.mark.asyncio
 async def test_goto_and_find(sample_path):
-    app = TermXLApp(sample_path)
+    app = TermSEApp(sample_path)
     async with app.run_test(size=(110, 30)) as pilot:
         await _ready(app, pilot)
         await pilot.press("ctrl+g")
@@ -174,7 +174,7 @@ async def test_goto_and_find(sample_path):
 
 @pytest.mark.asyncio
 async def test_quit_prompts_when_modified():
-    app = TermXLApp()
+    app = TermSEApp()
     async with app.run_test(size=(100, 30)) as pilot:
         await _ready(app, pilot)
         await type_text(pilot, "1")
@@ -188,7 +188,7 @@ async def test_quit_prompts_when_modified():
 
 @pytest.mark.asyncio
 async def test_formula_error_keeps_editing():
-    app = TermXLApp()
+    app = TermSEApp()
     async with app.run_test(size=(100, 30)) as pilot:
         await _ready(app, pilot)
         await type_text(pilot, "=1+*")
@@ -200,9 +200,9 @@ async def test_formula_error_keeps_editing():
 
 @pytest.mark.asyncio
 async def test_name_box_defines_and_jumps():
-    from termxl.model import names
+    from termse.model import names
 
-    app = TermXLApp()
+    app = TermSEApp()
     async with app.run_test(size=(100, 30)) as pilot:
         await _ready(app, pilot)
         for v in ("1", "2", "3"):
@@ -228,9 +228,9 @@ async def test_name_box_defines_and_jumps():
 
 @pytest.mark.asyncio
 async def test_name_manager_new_edit_delete():
-    from termxl.ui.dialogs import NameEditDialog, NameManagerDialog
+    from termse.ui.dialogs import NameEditDialog, NameManagerDialog
 
-    app = TermXLApp()
+    app = TermSEApp()
     async with app.run_test(size=(110, 32)) as pilot:
         await _ready(app, pilot)
         await type_text(pilot, "=A3*Rate")
@@ -286,14 +286,14 @@ def _many_sheets_file(tmp_path, n=15, hidden=()):
 
 
 def _tabs_text(app):
-    from termxl.ui.widgets import SheetTabs
+    from termse.ui.widgets import SheetTabs
     tabs = app.query_one("#tabs", SheetTabs)
     return tabs, tabs.render().plain
 
 
 @pytest.mark.asyncio
 async def test_sheet_tabs_scroll(tmp_path):
-    app = TermXLApp(_many_sheets_file(tmp_path))
+    app = TermSEApp(_many_sheets_file(tmp_path))
     async with app.run_test(size=(60, 20)) as pilot:
         await _ready(app, pilot)
         tabs, text = _tabs_text(app)
@@ -331,7 +331,7 @@ async def test_sheet_tabs_scroll(tmp_path):
 
 @pytest.mark.asyncio
 async def test_sheet_tabs_fit_without_arrows(tmp_path):
-    app = TermXLApp(_many_sheets_file(tmp_path, n=3))
+    app = TermSEApp(_many_sheets_file(tmp_path, n=3))
     async with app.run_test(size=(100, 20)) as pilot:
         await _ready(app, pilot)
         _, text = _tabs_text(app)
@@ -341,7 +341,7 @@ async def test_sheet_tabs_fit_without_arrows(tmp_path):
 @pytest.mark.asyncio
 async def test_goto_sheet_picker(tmp_path):
     from textual.command import CommandPalette
-    app = TermXLApp(_many_sheets_file(tmp_path, hidden=("Sheet12",)))
+    app = TermSEApp(_many_sheets_file(tmp_path, hidden=("Sheet12",)))
     async with app.run_test(size=(80, 24)) as pilot:
         await _ready(app, pilot)
         app.goto_sheet()

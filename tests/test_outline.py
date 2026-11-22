@@ -3,11 +3,11 @@ import openpyxl
 import pytest
 from openpyxl.worksheet.properties import Outline
 
-from termxl.io import xlsx
-from termxl.io.xlsx import new_workbook
-from termxl.model import outline
-from termxl.model.refs import col_index
-from termxl.ui.app import TermXLApp
+from termse.io import xlsx
+from termse.io.xlsx import new_workbook
+from termse.model import outline
+from termse.model.refs import col_index
+from termse.ui.app import TermSEApp
 
 from .test_ui import _ready, screen_text
 
@@ -141,7 +141,7 @@ def _exam_like(path):
 async def test_ui_click_buttons(tmp_path):
     path = str(tmp_path / "exam.xlsx")
     _exam_like(path)
-    app = TermXLApp(path)
+    app = TermSEApp(path)
     async with app.run_test(size=(160, 12)) as pilot:
         await _ready(app, pilot)
         g = app.grid
@@ -163,7 +163,7 @@ async def test_ui_click_buttons(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ui_group_keys(tmp_path):
-    app = TermXLApp(str(tmp_path / "new.xlsx"))
+    app = TermSEApp(str(tmp_path / "new.xlsx"))
     async with app.run_test(size=(100, 20)) as pilot:
         await _ready(app, pilot)
         g = app.grid

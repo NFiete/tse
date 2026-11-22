@@ -12,9 +12,9 @@ import subprocess
 import openpyxl
 import pytest
 
-from termxl.formula.errors import ExcelError
-from termxl.formula.parser import to_storage
-from termxl.io import xlsx
+from termse.formula.errors import ExcelError
+from termse.formula.parser import to_storage
+from termse.io import xlsx
 
 SOFFICE = shutil.which("soffice") or shutil.which("libreoffice")
 
@@ -140,7 +140,7 @@ def test_against_libreoffice(tmp_path):
         if isinstance(ours, ExcelError):
             ours = ours.code
         if hasattr(theirs, "hour") or hasattr(theirs, "toordinal"):  # LO marks some results as dates/times
-            from termxl.model.dates import to_serial
+            from termse.model.dates import to_serial
 
             theirs = to_serial(theirs)
         if f in EXCEL_DIFFERS:
@@ -160,9 +160,9 @@ def _same(a, b) -> bool:
 
 @pytest.mark.skipif(SOFFICE is None, reason="LibreOffice not installed")
 def test_saved_file_opens_in_libreoffice(sample_path, tmp_path):
-    """A workbook edited and saved by term_xl opens in LibreOffice with the right values."""
-    from termxl.model import structure
-    from termxl.model.refs import parse_addr
+    """A workbook edited and saved by tse opens in LibreOffice with the right values."""
+    from termse.model import structure
+    from termse.model.refs import parse_addr
 
     book = xlsx.load(sample_path)
     budget = book.sheet_by_name("Budget")

@@ -1,17 +1,17 @@
-# term_xl
+# tse
 
-A spreadsheet for the terminal that opens, edits and saves real Excel files.
+tse (terminal spreadsheet editor) is a spreadsheet for the terminal that opens, edits and saves real Excel files.
 
 ```
-./txl budget.xlsx          # open a workbook
-./txl new.xlsx             # start a new one (created on first Ctrl+S)
-./txl data.csv --sheet X   # CSV/TSV work too
-./txl --vi budget.xlsx     # vi-style keys
+./tse budget.xlsx          # open a workbook
+./tse new.xlsx             # start a new one (created on first Ctrl+S)
+./tse data.csv --sheet X   # CSV/TSV work too
+./tse --vi budget.xlsx     # vi-style keys
 ```
 
 It needs Python 3.11+ with `textual` and `openpyxl`. On Arch these are the system packages
 `python-textual` and `python-openpyxl`; nothing is installed with pip. `lxml` is used if it's
-available. Run it from the source tree with `./txl` or `python3 -m termxl`.
+available. Run it from the source tree with `./tse` or `python3 -m termse`.
 
 ## What it does
 
@@ -55,7 +55,7 @@ available. Run it from the source tree with `./txl` or `python3 -m termxl`.
   get the column formulas. Table styles aren't drawn: cells show their own formatting.
 
 - **Vi keys, if you prefer them.** Start with `--vi`, or pick "Use vi keys" in the command
-  palette (remembered in `~/.config/term_xl/settings.json`). `hjkl`, `w`/`b`/`{`/`}`, `gg`/`G`,
+  palette (remembered in `~/.config/tse/settings.json`). `hjkl`, `w`/`b`/`{`/`}`, `gg`/`G`,
   counts, `v`/`V` selection, `i`/`a`/`=` to edit (Esc confirms), `dd`/`x`, `yy`, `p`, `dr`/`yr`
   for whole rows, `u`/`Ctrl+R`, `/` search with `n`/`N`, marks, and `:w`, `:q`, `:wq`, `:e`,
   `:B12`. Ctrl shortcuts vi doesn't use keep their Excel meaning. `:set novi` switches back.
@@ -69,7 +69,7 @@ Press **F1** for the key reference and **Ctrl+P** for the command palette.
   models and some newer conditional formats**. If a file contains any of these you're warned
   when it opens, and saving over it asks first and offers to save a copy instead.
   Charts are kept, but some chart formatting may change.
-- If a formula uses a function term_xl doesn't implement (for example `BESSELJ`, or references
+- If a formula uses a function tse doesn't implement (for example `BESSELJ`, or references
   to other workbooks), the formula is kept unchanged and the cell keeps the value Excel saved.
   The status bar tells you when you're on such a cell.
 - Cutting and pasting a whole table moves its cells but not the table itself. Deleting a table
@@ -94,7 +94,7 @@ thousand formulas are effectively instant.
 ## Layout
 
 ```
-termxl/
+termse/
   model/      workbook + sheets, typed input, dates, undo, structural edits
   formula/    lexer/parser, evaluator, function library, dependency graph
   format/     number-format renderer, Excel style -> terminal colors
@@ -111,5 +111,5 @@ python3 -m pytest
 ```
 
 `tests/test_libreoffice.py` recalculates about 150 formulas with LibreOffice (`soffice`) and
-compares the results with term_xl's. It's skipped if LibreOffice isn't installed.
+compares the results with tse's. It's skipped if LibreOffice isn't installed.
 `tests/fixtures/make_sample.py` builds the demo workbook `tests/fixtures/sample.xlsx`.

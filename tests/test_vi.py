@@ -1,10 +1,10 @@
-"""Vi-style keys (TermXLApp(vi=True))."""
+"""Vi-style keys (TermSEApp(vi=True))."""
 import openpyxl
 import pytest
 
-from termxl import settings
-from termxl.model.refs import parse_addr
-from termxl.ui.app import TermXLApp
+from termse import settings
+from termse.model.refs import parse_addr
+from termse.ui.app import TermSEApp
 from tests.test_ui import _ready, type_text, val
 
 
@@ -19,7 +19,7 @@ def at(app):
 
 @pytest.mark.asyncio
 async def test_move_edit_and_esc_confirms():
-    app = TermXLApp(vi=True)
+    app = TermSEApp(vi=True)
     async with app.run_test(size=(100, 30)) as pilot:
         await _ready(app, pilot)
         assert "NORMAL" in str(app.query_one("#status").render())
@@ -56,7 +56,7 @@ async def test_move_edit_and_esc_confirms():
 
 @pytest.mark.asyncio
 async def test_esc_after_formula_error_then_discard():
-    app = TermXLApp(vi=True)
+    app = TermSEApp(vi=True)
     async with app.run_test(size=(100, 30)) as pilot:
         await _ready(app, pilot)
         await pilot.press("equals_sign")
@@ -69,7 +69,7 @@ async def test_esc_after_formula_error_then_discard():
 
 @pytest.mark.asyncio
 async def test_yank_delete_put_cells():
-    app = TermXLApp(vi=True)
+    app = TermSEApp(vi=True)
     async with app.run_test(size=(100, 30)) as pilot:
         await _ready(app, pilot)
         put(app, "A1", "1")
@@ -91,7 +91,7 @@ async def test_yank_delete_put_cells():
 
 @pytest.mark.asyncio
 async def test_rows_delete_put_and_open():
-    app = TermXLApp(vi=True)
+    app = TermSEApp(vi=True)
     async with app.run_test(size=(100, 30)) as pilot:
         await _ready(app, pilot)
         for i, v in enumerate(["a", "b", "c", "d"], 1):
@@ -123,7 +123,7 @@ async def test_rows_delete_put_and_open():
 @pytest.mark.asyncio
 async def test_command_line_and_search(tmp_path):
     path = str(tmp_path / "v.xlsx")
-    app = TermXLApp(path, vi=True)
+    app = TermSEApp(path, vi=True)
     async with app.run_test(size=(100, 30)) as pilot:
         await _ready(app, pilot)
         put(app, "C7", "apple")
@@ -156,11 +156,11 @@ async def test_command_line_and_search(tmp_path):
 
 @pytest.mark.asyncio
 async def test_preference_is_remembered():
-    app = TermXLApp()
+    app = TermSEApp()
     async with app.run_test(size=(100, 30)) as pilot:
         await _ready(app, pilot)
         assert app.vi is None
         app.set_vi(True)
     assert settings.load()["keys"] == "vi"
-    assert TermXLApp().vi is not None
-    assert TermXLApp(vi=False).vi is None
+    assert TermSEApp().vi is not None
+    assert TermSEApp(vi=False).vi is None

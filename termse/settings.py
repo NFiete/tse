@@ -1,4 +1,4 @@
-"""User preferences, kept in $XDG_CONFIG_HOME/term_xl/settings.json (~/.config/... by default)."""
+"""User preferences, kept in $XDG_CONFIG_HOME/tse/settings.json (~/.config/... by default)."""
 from __future__ import annotations
 
 import json
@@ -7,7 +7,7 @@ import os
 
 def path() -> str:
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    return os.path.join(base, "term_xl", "settings.json")
+    return os.path.join(base, "tse", "settings.json")
 
 
 def load() -> dict:

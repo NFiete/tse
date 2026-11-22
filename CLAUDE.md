@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-term_xl is a Textual-based terminal spreadsheet that opens, edits and saves real Excel files
+tse is a Textual-based terminal spreadsheet that opens, edits and saves real Excel files
 (`.xlsx/.xlsm/.xltx/.xltm`, plus CSV/TSV) with its own formula parser and recalculation engine.
 See README.md for user-facing features and compatibility limits.
 
@@ -16,7 +16,7 @@ See README.md for user-facing features and compatibility limits.
 ## Commands
 
 ```
-./txl file.xlsx                      # run from the source tree (or: python3 -m termxl file.xlsx)
+./tse file.xlsx                      # run from the source tree (or: python3 -m termse file.xlsx)
 python3 -m pytest                    # full suite (~25s)
 python3 -m pytest tests/test_functions.py
 python3 -m pytest tests/test_ui.py -k test_type_values_and_formulas
@@ -32,8 +32,8 @@ the best way to verify Excel-compatible semantics.
 ### openpyxl is the source of truth
 `model/workbook.py` `Workbook` wraps an openpyxl workbook; each `Sheet` wraps an openpyxl
 worksheet. Raw cell contents and styles live in openpyxl objects (accessed directly via
-`ws._cells` for speed), so anything term_xl doesn't model (validation, conditional formats,
-charts, …) round-trips untouched. term_xl's own state is layered on top per sheet:
+`ws._cells` for speed), so anything tse doesn't model (validation, conditional formats,
+charts, …) round-trips untouched. tse's own state is layered on top per sheet:
 `formulas` (`(r,c) -> Formula` with parsed AST), `values` (computed results), `cached`
 (Excel's saved results), and `stale` (cells showing a cached value that couldn't be recomputed).
 Keys throughout are `(sheet_obj, row, col)` with 1-based rows/cols.
@@ -110,11 +110,11 @@ deliberate performance measure for large workbooks; keep it when touching those 
   format.
 
 ### UI (`ui/`)
-- `app.py` `TermXLApp`: key bindings, edit mode (including "point mode" where arrows insert
+- `app.py` `TermSEApp`: key bindings, edit mode (including "point mode" where arrows insert
   references into a formula), clipboard, dialogs, status bar; calls into model functions.
 - `vi.py` `ViKeys`: optional vi-style keys (`app.vi`, None in Excel mode). `Grid.on_key` offers
   every key to `ViKeys.handle` first; unclaimed keys fall through to the Excel bindings. The
-  preference is stored by `termxl/settings.py` (`$XDG_CONFIG_HOME/term_xl/settings.json`); tests
+  preference is stored by `termse/settings.py` (`$XDG_CONFIG_HOME/tse/settings.json`); tests
   point `XDG_CONFIG_HOME` at a temp dir (autouse fixture in `conftest.py`).
 - `grid.py` `Grid`: virtualized line-by-line rendering (`render_line`), selection, frozen panes.
   When a sheet has outlines, `Layout.co_h` band lines sit above the column header and a
@@ -127,6 +127,6 @@ deliberate performance measure for large workbooks; keep it when touching those 
 
 `tests/conftest.py` provides helpers: `ws` (a `Sheetish` wrapper over a new workbook:
 `ws["A1"] = "=1+1"; ws["A1"] -> 2`), `ev` (evaluate one formula with optional cell setup), and
-`sample_path`. UI tests drive `TermXLApp` with Textual's `run_test()`/Pilot (`tests/test_ui.py`
+`sample_path`. UI tests drive `TermSEApp` with Textual's `run_test()`/Pilot (`tests/test_ui.py`
 has `_ready`, `type_text`, `screen_text` helpers). Round-trip tests save and reload through
 openpyxl to verify preservation.

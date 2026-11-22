@@ -1,6 +1,6 @@
 import pytest
 
-from termxl.formula.parser import (
+from termse.formula.parser import (
     FormulaSyntaxError, Unsupported, normalize, parse, to_display, to_storage, translate,
 )
 

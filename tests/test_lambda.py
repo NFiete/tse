@@ -3,10 +3,10 @@ LET is also cross-checked against LibreOffice in test_libreoffice.py; LibreOffic
 import openpyxl
 import pytest
 
-from termxl.formula.errors import ExcelError
-from termxl.formula.parser import FormulaSyntaxError, normalize, parse, to_display, to_storage
-from termxl.io import xlsx
-from termxl.model import names
+from termse.formula.errors import ExcelError
+from termse.formula.parser import FormulaSyntaxError, normalize, parse, to_display, to_storage
+from termse.io import xlsx
+from termse.model import names
 
 from .test_dynamic_arrays import grid
 

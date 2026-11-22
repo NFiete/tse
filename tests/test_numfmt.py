@@ -1,7 +1,7 @@
 import pytest
 
-from termxl.format.numfmt import format_value, general, is_date_format
-from termxl.model.inputparse import parse_input
+from termse.format.numfmt import format_value, general, is_date_format
+from termse.model.inputparse import parse_input
 
 
 @pytest.mark.parametrize("value,fmt,expected", [

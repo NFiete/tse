@@ -3,8 +3,8 @@ import zipfile
 
 import openpyxl
 
-from termxl.io import xlsx
-from termxl.model.refs import parse_addr
+from termse.io import xlsx
+from termse.model.refs import parse_addr
 
 
 def _snapshot(ws):
