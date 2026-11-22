@@ -360,16 +360,21 @@ def _rewrite_all(book, target_sheet, axis: str, idx: int, f) -> tuple[dict, bool
                     book._damaged.add(cell)
                     book._damaged_pre[(s, rc[0], rc[1])] = old
     names_changed = False
-    try:
-        for name, dn in list(book.wb.defined_names.items()):
-            txt = "=" + (dn.attr_text or "")
-            new = _transform_formula(txt, None, target_sheet, book, axis, f)
-            if new != txt:
-                dn.attr_text = new[1:]
-                names_changed = True
-    except AttributeError:
-        pass
+    for dn in _defined_names(book):
+        txt = "=" + (dn.attr_text or "")
+        new = _transform_formula(txt, None, target_sheet, book, axis, f)
+        if new != txt:
+            dn.attr_text = new[1:]
+            names_changed = True
     return changed, names_changed
+
+
+def _defined_names(book) -> list:
+    """Every defined name: workbook-level ones and those scoped to a sheet."""
+    out = list(book.wb.defined_names.values())
+    for s in book.sheets:
+        out.extend(s.ws.defined_names.values())
+    return out
 
 
 def _post_key(sheet, axis, idx, n, key):
@@ -686,14 +691,11 @@ def rename_sheet(book, sheet, new_name: str, record: bool = True):
                 new = transform_refs(disp, fn_factory(s))
                 if new != disp:
                     cell._value = to_storage(new)
-    try:
-        for name, dn in book.wb.defined_names.items():
-            txt = "=" + (dn.attr_text or "")
-            new = transform_refs(txt, fn_factory(None))
-            if new != txt:
-                dn.attr_text = new[1:]
-    except AttributeError:
-        pass
+    for dn in _defined_names(book):
+        txt = "=" + (dn.attr_text or "")
+        new = transform_refs(txt, fn_factory(None))
+        if new != txt:
+            dn.attr_text = new[1:]
     sheet.ws.title = new_name
     _reresolve(book)
     book.modified = True

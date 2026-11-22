@@ -124,3 +124,28 @@ def test_names_saved_to_file(setup, tmp_path):
     assert wb["Other"].defined_names["Local"].attr_text == "0.5"
     b2 = xlsx.load(out)
     assert {n.name for n in names.list_names(b2)} == {"Amounts", "Local"}
+
+
+def test_sheet_scoped_names_follow_structural_edits(setup):
+    ws = setup
+    b, s = ws.book, ws.sheet
+    from termse.model import structure
+
+    other = structure.add_sheet(b, "Other")
+    names.set_name(b, "Top", "Sheet!$A$3", s, s)
+    names.set_name(b, "Far", "Sheet!$A$2", other, other)
+    ws["C1"] = "=Top"
+    b.set_input(other, 1, 1, "=Far")
+    structure.insert(b, s, "row", 1, 2)
+    assert s.ws.defined_names["Top"].attr_text == "Sheet!$A$5"
+    assert other.ws.defined_names["Far"].attr_text == "Sheet!$A$4"
+    assert ws["C3"] == 20
+    assert b.get_value(other, 1, 1) == 10
+    b.do_undo()
+    assert s.ws.defined_names["Top"].attr_text == "Sheet!$A$3"
+    assert ws["C1"] == 20
+    structure.rename_sheet(b, s, "Data")
+    assert s.ws.defined_names["Top"].attr_text == "Data!$A$3"
+    assert other.ws.defined_names["Far"].attr_text == "Data!$A$2"
+    assert ws["C1"] == 20
+    assert b.get_value(other, 1, 1) == 10
