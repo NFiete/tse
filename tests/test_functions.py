@@ -46,6 +46,13 @@ def test_yearfrac_actual_actual(ev):
     assert ev("=YEARFRAC(DATE(2023,1,1),DATE(2024,6,1),1)") == pytest.approx(517 / 365.5)
 
 
+def test_dollar_rounds_half_away_from_zero(ev):
+    assert ev("=DOLLAR(0.125)") == "$0.13"
+    assert ev("=DOLLAR(2.5,0)") == "$3"
+    assert ev("=DOLLAR(1234.567,-2)") == "$1,200"
+    assert ev("=DOLLAR(-1234.567,1)") == "($1,234.6)"
+
+
 def test_huge_number_text(ev):
     assert ev('=VALUE("1e400")') == VALUE
     assert ev('="1e400"+1') == VALUE

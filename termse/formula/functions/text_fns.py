@@ -264,8 +264,10 @@ def FIXED(x, decimals=2, no_commas=False):
 
 @fn("DOLLAR")
 def DOLLAR(x, decimals=2):
+    from .math_fns import ROUND
+
     d = to_int(decimals if decimals is not None else 2)
-    v = to_number(x)
+    v = ROUND(to_number(x), d)  # half away from zero, and d < 0 rounds left of the point
     s = f"${abs(v):,.{max(d, 0)}f}"
     return f"({s})" if v < 0 else s
 
