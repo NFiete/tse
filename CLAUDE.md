@@ -96,6 +96,11 @@ deliberate performance measure for large workbooks; keep it when touching those 
   (defined names) do their own bookkeeping: rewrite formulas across all sheets and names, shift
   openpyxl dimensions/merges/validations/etc., re-register formulas, and push custom
   `UndoEntry(undo=..., redo=...)` closures. Functions take `record=True` to control undo recording.
+- `book.undo` is an `UndoTree` (`model/undo.py`): pushing after an undo starts a new branch rather
+  than discarding the undone edits, and `goto(node)` undoes/redoes along the tree path to any state,
+  so every entry's undo/redo must work from exactly the state it was recorded in. Don't touch its
+  nodes directly; use `squash(mark, label)` to merge steps and `forget(node)` to drop a failed one.
+  `ui/undotree.py` is the Alt+Z history panel (`graph()` lays the tree out git-log style).
 - `model/outline.py` handles grouped rows/columns. Outline state lives only in openpyxl row/column
   dimensions (`outlineLevel`, `hidden`, `collapsed` on the summary row/col); groups are derived on
   demand. Column dims are read through `Sheet._build_colw` (cached, reset by

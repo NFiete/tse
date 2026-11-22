@@ -28,7 +28,7 @@ from .dates import to_serial
 from .inputparse import parse_input
 from .refs import MAX_COL, MAX_ROW, Rect, col_letter
 from .spill import SpillIndex
-from .undo import UndoEntry, UndoStack
+from .undo import UndoEntry, UndoTree
 
 sys.setrecursionlimit(max(sys.getrecursionlimit(), 20000))
 
@@ -232,7 +232,7 @@ class Workbook:
         self.evaluating: set = set()
         self.names: dict[str, object] = {}
         self.sheet_names: dict[tuple, object] = {}  # (sheet lower, name lower) -> ast
-        self.undo = UndoStack()
+        self.undo = UndoTree()
         self.modified = False
         self.warnings: list[str] = []  # content we cannot preserve on save
         self._tx: dict | None = None
@@ -1397,6 +1397,13 @@ class Workbook:
         if e is not None:
             self.modified = True
         return e
+
+    def undo_goto(self, node) -> list:
+        """Move to any state in the undo tree; returns the entries undone/redone on the way."""
+        done = self.undo.goto(node)
+        if done:
+            self.modified = True
+        return done
 
 
 def _formula_text(value) -> str:

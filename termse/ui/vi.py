@@ -13,7 +13,6 @@ from contextlib import contextmanager
 from textual import events
 
 from ..model import structure
-from ..model.undo import UndoEntry
 from ..model.refs import MAX_COL, MAX_ROW, Rect, addr
 
 # One-key motions: name -> (kind, args). See ViKeys._target.
@@ -189,6 +188,14 @@ class ViKeys:
             else:
                 app._switch_sheet_relative(n if cmd == "gt" else -n)
             self.exit_visual(collapse=False)
+        elif cmd in ("g-", "g+"):
+            node = app.book.undo.step_time(-n if cmd == "g-" else n)
+            if node is None:
+                app.set_message("Already at the oldest change" if cmd == "g-" else "Already at the newest change")
+            else:
+                self.visual = None
+                app.undo_jump(node, announce=True)
+                g.set_cursor(*g.active)
         elif cmd in ("zz", "zt", "zb"):
             self.scroll_to_cursor(cmd)
         elif cmd in ("zc", "zo"):
@@ -429,25 +436,12 @@ class ViKeys:
     @contextmanager
     def one_undo(self, label: str):
         """Merge the undo steps pushed inside the block into a single step."""
-        stack = self.app.book.undo
-        before = {id(e) for e in stack.entries[:stack.pos]}
+        tree = self.app.book.undo
+        mark = tree.current
         try:
             yield
         finally:
-            new = [e for e in stack.entries[:stack.pos] if id(e) not in before]
-            if len(new) > 1:
-                del stack.entries[stack.pos - len(new):stack.pos]
-                stack.pos -= len(new)
-
-                def undo():
-                    for e in reversed(new):
-                        e.undo()
-
-                def redo():
-                    for e in new:
-                        e.redo()
-
-                stack.push(UndoEntry(label, undo, redo, new[0].where))
+            tree.squash(mark, label)
 
     def put(self, before: bool, n: int = 1):
         """p / P. Whole rows or columns (from yr/dr/yc/dc/V) are put as new rows below (above) the
@@ -583,6 +577,8 @@ class ViKeys:
             app._switch_sheet_relative(-1)
         elif cmd in ("h", "help"):
             app.action_help()
+        elif cmd in ("undol", "undolist", "undotree", "undohistory"):
+            app.action_undo_tree()
         elif cmd == "sort":
             app.sort_selection(descending=bang)
         elif cmd in ("noh", "nohlsearch"):

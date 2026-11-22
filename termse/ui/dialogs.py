@@ -286,6 +286,8 @@ HELP_TEXT = """\
   Ctrl+C  Ctrl+X  Ctrl+V        copy, cut, paste (formulas adjust like Excel)
   Ctrl+D / Ctrl+R               fill down / right
   Ctrl+Z / Ctrl+Y               undo / redo
+  Alt+Z                         undo history: every earlier state as a tree, including edits
+                                undone and then replaced; ↑↓ previews a state, Enter keeps it
   Ctrl+B  Ctrl+I  Ctrl+U        bold, italic, underline  (Alt+B / Alt+I / Alt+U too)
   Alt+=  /  Alt+-               insert / delete rows or columns
   Alt+Left / Alt+Right          narrower / wider column
@@ -329,6 +331,8 @@ VI_HELP_TEXT = """\
   yy  Y                         yank the cell or selection
   p  P                          put; yanked rows/columns are inserted below/above (right/left)
   u  Ctrl+R                     undo / redo
+  g-  g+                        step back / forward through every state in time, across
+                                branches of the undo tree;  :undotree browses the tree
   /text  ?text  n  N            search down / up, next / previous match
   gt gT  (3gt)                  next / previous sheet (sheet 3)
   zc zo / zM zR                 collapse / expand the group at the cursor / all groups

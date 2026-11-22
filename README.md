@@ -14,6 +14,7 @@ tse --vi budget.xlsx     # vi-style keys
 
 - Should be compatible with most excel workbooks
 - vi style keybindings (optional).
+- Undo-tree style undo
 - Reasonably fast
 - Runs in the terminal
 

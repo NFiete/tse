@@ -60,3 +60,4 @@ def save_csv(book: Workbook, sheet, path: str):
             w.writerow(row)
     os.replace(tmp, path)
     book.modified = False
+    book.undo.mark_saved()

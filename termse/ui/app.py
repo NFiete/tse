@@ -90,6 +90,7 @@ class TermSEApp(App):
         Binding("ctrl+n", "new", "New", show=False),
         Binding("ctrl+z", "undo", "Undo"),
         Binding("ctrl+y", "redo", "Redo", show=False),
+        Binding("alt+z", "undo_tree", "Undo history", show=False),
         Binding("ctrl+c", "copy", "Copy", show=False),
         Binding("ctrl+x", "cut", "Cut", show=False),
         Binding("ctrl+v", "paste", "Paste", show=False),
@@ -711,6 +712,52 @@ class TermSEApp(App):
         self._goto_where(e.where)
         self.set_message(f"Redid: {e.label}")
         self.after_change(layout=True)
+
+    def undo_jump(self, node, announce: bool = False) -> bool:
+        """Move the workbook to any state in the undo tree."""
+        done = self.book.undo_goto(node)
+        if not done:
+            return False
+        self._goto_where(done[-1].where)
+        if announce:
+            self.set_message(f"Undo state {node.seq}: {node.label}" if node.parent else "Undo state 0: original")
+        self.after_change(layout=True)
+        return True
+
+    def action_undo_tree(self):
+        """Open the undo history panel."""
+        if self.editing is not None or not self._need_grid():
+            return
+        from .undotree import UndoTreeScreen
+
+        tree = self.book.undo
+        if not tree.count:
+            self.set_message("No undo history yet")
+            return
+        start = tree.current
+        redo = {n: n.redo_child for n in tree.nodes()}
+        g = self.grid
+        view = (g.sheet.name, g.active, g.anchor, g.corner, g.top, g.left)
+
+        def done(keep):
+            if keep:
+                node = tree.current
+                if node is not start:
+                    self.set_message(f"Undo state {node.seq}: {node.label}" if node.parent
+                                     else "Undo state 0: original")
+                return
+            self.undo_jump(start)
+            for n, r in redo.items():  # browsing changed which branches redo follows
+                n.redo_child = r
+            name, active, anchor, corner, top, left = view
+            s = self.book.sheet_by_name(name)
+            if s is not None:
+                if s is not g.sheet:
+                    g.show_sheet(s)
+                g.active, g.anchor, g.corner, g.top, g.left = active, anchor, corner, top, left
+            self.after_change(layout=True)
+
+        self.push_screen(UndoTreeScreen(self), done)
 
     def _goto_where(self, where):
         if not where:
@@ -1521,7 +1568,7 @@ class TermSEApp(App):
             if err:
                 return err
             u = self.book.undo
-            top = u.entries[u.pos - 1] if u.pos else None
+            top = u.current
             try:
                 with self.book.transaction("Table settings", (cur.sheet.name, cur.g.rect)):
                     if new_name != cur.name:
@@ -1533,9 +1580,10 @@ class TermSEApp(App):
                     if totals != bool(cur.g.tot):
                         tables.set_totals(self.book, cur, totals)
             except ValueError as e:
-                if u.pos and u.entries[u.pos - 1] is not top:  # roll back the part that was done
+                if u.current is not top:  # roll back the part that was done
+                    failed = u.current
                     self.book.do_undo()
-                    del u.entries[u.pos:]
+                    u.forget(failed)
                 self.after_change()
                 return str(e)
             self.set_message(f"Updated table {new_name}")
@@ -1984,6 +2032,8 @@ class TermSEApp(App):
                     "in formulas become normal references", lambda: self.table_command("convert"))
             yield C("Table: delete", "Delete the table at the cursor and its contents",
                     lambda: self.table_command("delete"))
+        yield C("Undo history…", "Browse the undo tree and go back to any earlier state, including "
+                "edits that were undone and then replaced (Alt+Z)", self.action_undo_tree)
         yield C("Go to…", "Jump to a cell, range or name (Ctrl+G)", self.action_goto)
         yield C("Find…", "Find text (Ctrl+F)", self.action_find)
         yield C("Replace…", "Find and replace (Ctrl+H)", self.action_replace)

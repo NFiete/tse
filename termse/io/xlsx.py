@@ -312,6 +312,7 @@ def save(book: Workbook, path: str, active_sheet=None, cursor=None):
             os.unlink(tmp)
     book.path = path
     book.modified = False
+    book.undo.mark_saved()
 
 
 def _umask() -> int:
