@@ -50,6 +50,14 @@ def _time_fmt(s, ampm) -> str:
     return base + " AM/PM" if ampm else base
 
 
+def _serial(date: dt.datetime, epoch1904: bool):
+    """Serial number of a date, or None before the first date the workbook can hold (Excel keeps
+    such input as text)."""
+    if date < (dt.datetime(1904, 1, 1) if epoch1904 else dt.datetime(1900, 1, 1)):
+        return None
+    return to_serial(date, epoch1904)
+
+
 def parse_date_text(text: str, epoch1904: bool = False):
     """Return (serial, number_format) for date/time-looking text, else None."""
     t = text.strip()
@@ -74,7 +82,8 @@ def parse_date_text(text: str, epoch1904: bool = False):
                     return None
                 date = date.replace(hour=tp[0], minute=tp[1]) + dt.timedelta(seconds=tp[2])
                 fmt = "yyyy-mm-dd " + _time_fmt(m.group(6), m.group(7))
-            return to_serial(date, epoch1904), fmt
+            serial = _serial(date, epoch1904)
+            return None if serial is None else (serial, fmt)
         m = _RE_MDY.match(t)
         if m:
             mo, d = int(m.group(1)), int(m.group(2))
@@ -86,15 +95,18 @@ def parse_date_text(text: str, epoch1904: bool = False):
                     return None
                 date = date.replace(hour=tp[0], minute=tp[1]) + dt.timedelta(seconds=tp[2])
                 fmt = "m/d/yyyy h:mm"
-            return to_serial(date, epoch1904), fmt
+            serial = _serial(date, epoch1904)
+            return None if serial is None else (serial, fmt)
         m = _RE_DMONY.match(t)
         if m and m.group(2).lower() in _MONTHS:
             date = dt.datetime(_year(m.group(3)), _MONTHS[m.group(2).lower()], int(m.group(1)))
-            return to_serial(date, epoch1904), "d-mmm-yy" if m.group(3) else "d-mmm"
+            serial = _serial(date, epoch1904)
+            return None if serial is None else (serial, "d-mmm-yy" if m.group(3) else "d-mmm")
         m = _RE_MONDY.match(t)
         if m and m.group(1).lower() in _MONTHS:
             date = dt.datetime(_year(m.group(3)), _MONTHS[m.group(1).lower()], int(m.group(2)))
-            return to_serial(date, epoch1904), "mmm d, yyyy" if m.group(3) else "d-mmm"
+            serial = _serial(date, epoch1904)
+            return None if serial is None else (serial, "mmm d, yyyy" if m.group(3) else "d-mmm")
     except ValueError:
         return None
     return None

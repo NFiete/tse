@@ -79,6 +79,9 @@ def test_is_date_format():
     ("=A1", "formula", "=A1", None),
     ("hello", "text", "hello", None),
     ("1e3", "number", 1000.0, "0.00E+00"),
+    ("1/1/1800", "text", "1/1/1800", None),  # before 1900: Excel keeps dates as text
+    ("1899-12-31", "text", "1899-12-31", None),
+    ("1/1/1900", "number", 1, "m/d/yyyy"),
     ("1e400", "text", "1e400", None),  # too big: kept as text instead of crashing
     ("-2E+309", "text", "-2E+309", None),
 ])

@@ -53,6 +53,11 @@ def test_dollar_rounds_half_away_from_zero(ev):
     assert ev("=DOLLAR(-1234.567,1)") == "($1,234.6)"
 
 
+def test_dates_before_1900_are_text(ev):
+    assert ev('=DATEVALUE("1/1/1800")') == VALUE
+    assert ev('=DATEVALUE("1/1/1900")') == 1
+
+
 def test_huge_number_text(ev):
     assert ev('=VALUE("1e400")') == VALUE
     assert ev('="1e400"+1') == VALUE
