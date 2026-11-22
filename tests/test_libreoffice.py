@@ -60,7 +60,7 @@ FORMULAS = [
     '=SUM(INDIRECT("B2:B"&4))', "=ADDRESS(3,4,2)", "=1/3+1/3+1/3=1", "=0.1+0.2", "=2^-2", "=-3^2",
     '="10"*2', "=TRUE+TRUE", '=SUMPRODUCT((E2:E7="fruit")*(B2:B7>2))', "=SUM((B2:B7>2)*C2:C7)",
     "=LOOKUP(5,B2:B7,A2:A7)", "=SUM(B2:INDEX(B2:B7,3))", '=COUNTIF(B2:B7,"<>3")', '=COUNTIF(A2:A7,"<c")',
-    "=MAXA(B2:B7)", '=AVERAGEA(B2:B7)', "=SUBTOTAL(9,B2:B7)", "=SUBTOTAL(1,C2:C7)",
+    "=MAXA(B2:B7)", "=MAXA(A2:A3,-1)", "=MINA(A2:A3,1)", "=MINA(B2:B7,TRUE)", '=AVERAGEA(B2:B7)', "=SUBTOTAL(9,B2:B7)", "=SUBTOTAL(1,C2:C7)",
     '=FIXED(1234.567,1)', '=DOLLAR(-1234.5)', '=CHAR(65)&CODE("a")', "=CLEAN(\"a\"&CHAR(7)&\"b\")",
     "=1E+300*1E+300", "=SQRT(-1)", '=VALUE("abc")', "=NA()", "=1/0",
     # statistical distributions and tests

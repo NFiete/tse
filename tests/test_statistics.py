@@ -124,6 +124,9 @@ def test_a_variants_count_text_and_logicals(ev):
     assert ev("=STDEVA(A1:A4)") == pytest.approx(1.583333333333**0.5)
     assert ev("=STDEVPA(A1:A4)") == pytest.approx(1.1875**0.5)
     assert ev('=VARA(1,TRUE,"3")') == pytest.approx(4 / 3)  # typed text numbers count
+    assert ev("=MAXA(A3,-1)") == 0  # text in a reference is 0
+    assert ev("=MINA(A2:A4,5)") == 0
+    assert ev('=MAXA("x")') == VALUE
 
 
 def test_array_results(ev):

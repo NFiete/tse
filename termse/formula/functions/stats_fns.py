@@ -122,13 +122,13 @@ def MIN(ctx, *args):
 
 @fn("MAXA", kind="raw", min_args=1)
 def MAXA(ctx, *args):
-    vals = numbers(ctx, args, bools_in_refs=True)
+    vals = _a_values(ctx, args)
     return max(vals) if vals else 0
 
 
 @fn("MINA", kind="raw", min_args=1)
 def MINA(ctx, *args):
-    vals = numbers(ctx, args, bools_in_refs=True)
+    vals = _a_values(ctx, args)
     return min(vals) if vals else 0
 
 
