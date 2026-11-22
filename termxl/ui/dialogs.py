@@ -273,6 +273,8 @@ HELP_TEXT = """\
   address box (top left)        type a cell or name to go there,
                                 or a new name to name the selection
   Ctrl+PgUp / Ctrl+PgDn         previous / next sheet
+  sheet tabs                    click to switch; scroll the wheel or click ◀ ▶ when they
+                                don't fit; Ctrl+P "Go to sheet…" lists every sheet
 
 [b]Editing[/b]
   type                          replace the cell's contents

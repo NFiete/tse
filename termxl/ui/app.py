@@ -1278,6 +1278,29 @@ class TermXLApp(App):
         self.book.modified = True
         self.after_change()
 
+    def goto_sheet(self):
+        """Show a searchable list of every sheet; picking one switches to it (hidden ones are unhidden)."""
+        def pick(idx: int):
+            def run():
+                s = self.book.sheets[idx]
+                if s.ws.sheet_state != "visible":
+                    s.ws.sheet_state = "visible"
+                    self.book.modified = True
+                    self.set_message(f"Unhid sheet '{s.name}'")
+                self.switch_sheet(idx)
+            return run
+
+        cur = self.grid.sheet
+        cmds = []
+        for i, s in enumerate(self.book.sheets):
+            notes = [f"sheet {i + 1} of {len(self.book.sheets)}"]
+            if s is cur:
+                notes.append("current")
+            if s.ws.sheet_state != "visible":
+                notes.append("hidden — will be unhidden")
+            cmds.append((s.name, pick(i), ", ".join(notes)))
+        self.search_commands(cmds, placeholder="Go to sheet…")
+
     def unhide_sheets(self):
         n = 0
         for s in self.book.sheets:
@@ -1934,6 +1957,7 @@ class TermXLApp(App):
         yield C("Freeze top row", "Keep row 1 visible", lambda: self.freeze("row"))
         yield C("Freeze first column", "Keep column A visible", lambda: self.freeze("col"))
         yield C("Unfreeze panes", "Remove frozen panes", lambda: self.freeze(None))
+        yield C("Go to sheet…", "Pick a sheet from a list of all sheets", self.goto_sheet)
         yield C("Add sheet", "Insert a new sheet after this one", self.action_add_sheet)
         yield C("Rename sheet…", "Rename the current sheet", self.action_rename_sheet)
         yield C("Delete sheet", "Delete the current sheet", self.action_delete_sheet)

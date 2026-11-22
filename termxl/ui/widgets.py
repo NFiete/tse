@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 
+from rich.cells import cell_len
 from rich.highlighter import Highlighter
 from rich.text import Text
 from textual import events
@@ -65,14 +66,48 @@ class FormulaInput(Input):
 
 
 class SheetTabs(Widget):
+    """The sheet tab strip. When the tabs don't fit it scrolls: ◀/▶ markers show that tabs are cut off
+    (click them or use the mouse wheel to scroll) and switching sheets brings the active tab into view."""
+
     DEFAULT_CSS = """
     SheetTabs { height: 1; width: 1fr; background: $panel; }
     """
+    LEFT = "◀ "
+    RIGHT = " ▶"
+    ADD = " + "
 
     def __init__(self, **kw):
         super().__init__(**kw)
-        self._spans: list[tuple[int, int, int]] = []  # (x0, x1, sheet index)
-        self.offset_idx = 0
+        self._spans: list[tuple[int, int, int]] = []  # (x0, x1, sheet index); -1 add, -2/-3 scroll left/right
+        self.offset_idx = 0  # index into the visible tabs of the first one shown
+        self._follow_key = None
+        self._max_offset = 0
+
+    def _tabs(self):
+        book = self.app.book
+        current = self.app.grid.sheet
+        return [(i, s) for i, s in enumerate(book.sheets) if s.ws.sheet_state == "visible" or s is current]
+
+    def _fit(self, widths: list[int], o: int, area: int) -> int:
+        """How many tabs starting at `o` fit in `area` cells (at least one), allowing for the arrows."""
+        left = cell_len(self.LEFT) if o > 0 else 0
+        rest = widths[o:]
+        if left + sum(rest) <= area:
+            return len(rest)
+        room = area - left - cell_len(self.RIGHT)
+        n = used = 0
+        for w in rest:
+            if used + w > room:
+                break
+            used += w
+            n += 1
+        return max(1, n)
+
+    def scroll_tabs(self, d: int) -> None:
+        o = max(0, min(self._max_offset, self.offset_idx + d))
+        if o != self.offset_idx:
+            self.offset_idx = o
+            self.refresh()
 
     def render(self) -> Text:
         app = self.app
@@ -81,11 +116,44 @@ class SheetTabs(Widget):
         self._spans = []
         if book is None:
             return t
-        x = 0
         current = app.grid.sheet
-        visible = [(i, s) for i, s in enumerate(book.sheets) if s.ws.sheet_state == "visible" or s is current]
-        for i, s in visible:
-            label = f" {s.name} "
+        tabs = self._tabs()
+        labels = [f" {s.name} " for _, s in tabs]
+        widths = [cell_len(lb) + 1 for lb in labels]  # + separator
+        hidden = sum(1 for s in book.sheets if s.ws.sheet_state != "visible")
+        hidden_txt = f"  ({hidden} hidden)" if hidden else ""
+        width = self.size.width or 10**6
+        area = width - cell_len(self.ADD) - cell_len(hidden_txt)
+        if area < 20 and hidden_txt:
+            hidden_txt = ""
+            area = width - cell_len(self.ADD)
+        n = len(tabs)
+        # The furthest-right offset that still leaves no empty space after the last tab.
+        mx = n - 1 if n else 0
+        while mx > 0 and (mx - 1) + self._fit(widths, mx - 1, area) >= n:
+            mx -= 1
+        self._max_offset = mx
+        o = max(0, min(self.offset_idx, mx))
+        key = (current, tuple(lb for lb in labels), width)
+        if key != self._follow_key:
+            # The active sheet, the tab names or the width changed: bring the active tab into view.
+            self._follow_key = key
+            ci = next((k for k, (_, s) in enumerate(tabs) if s is current), 0)
+            if ci < o:
+                o = ci
+            while o < ci and ci >= o + self._fit(widths, o, area):
+                o += 1
+            o = min(o, mx)
+        self.offset_idx = o
+        shown = self._fit(widths, o, area) if n else 0
+        x = 0
+        if o > 0:
+            t.append(self.LEFT, style="bold")
+            self._spans.append((x, x + cell_len(self.LEFT), -2))
+            x += cell_len(self.LEFT)
+        for k in range(o, o + shown):
+            i, s = tabs[k]
+            label = labels[k]
             on = s is current
             style = "bold reverse" if on else "dim"
             if s.ws.sheet_properties.tabColor is not None and getattr(s.ws.sheet_properties.tabColor, "rgb", None):
@@ -94,13 +162,16 @@ class SheetTabs(Widget):
                     style += f" underline #{rgb[-6:]}"
             t.append(label, style=style)
             t.append("│", style="dim")
-            self._spans.append((x, x + len(label), i))
-            x += len(label) + 1
-        hidden = sum(1 for s in book.sheets if s.ws.sheet_state != "visible")
-        t.append(" + ", style="bold")
-        self._spans.append((x, x + 3, -1))
-        if hidden:
-            t.append(f"  ({hidden} hidden)", style="dim")
+            self._spans.append((x, x + cell_len(label), i))
+            x += widths[k]
+        if o + shown < n:
+            t.append(self.RIGHT, style="bold")
+            self._spans.append((x, x + cell_len(self.RIGHT), -3))
+            x += cell_len(self.RIGHT)
+        t.append(self.ADD, style="bold")
+        self._spans.append((x, x + cell_len(self.ADD), -1))
+        if hidden_txt:
+            t.append(hidden_txt, style="dim")
         return t
 
     def on_click(self, event: events.Click) -> None:
@@ -108,11 +179,31 @@ class SheetTabs(Widget):
             if x0 <= event.x < x1:
                 if idx == -1:
                     self.app.action_add_sheet()
+                elif idx == -2:
+                    self.scroll_tabs(-1)
+                elif idx == -3:
+                    self.scroll_tabs(1)
                 else:
                     self.app.switch_sheet(idx)
                     if event.chain == 2:
                         self.app.action_rename_sheet()
                 return
+
+    def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        event.stop()
+        self.scroll_tabs(1)
+
+    def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        event.stop()
+        self.scroll_tabs(-1)
+
+    def on_mouse_scroll_right(self, event: events.MouseScrollRight) -> None:
+        event.stop()
+        self.scroll_tabs(1)
+
+    def on_mouse_scroll_left(self, event: events.MouseScrollLeft) -> None:
+        event.stop()
+        self.scroll_tabs(-1)
 
 
 class StatusBar(Static):

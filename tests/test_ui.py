@@ -271,3 +271,95 @@ async def test_name_manager_new_edit_delete():
         await pilot.pause(0.05)
         await pilot.press("ctrl+z")
         assert val(app, "A1") == 2
+
+
+def _many_sheets_file(tmp_path, n=15, hidden=()):
+    wb = openpyxl.Workbook()
+    wb.active.title = "Sheet01"
+    for i in range(2, n + 1):
+        wb.create_sheet(f"Sheet{i:02d}")
+    for name in hidden:
+        wb[name].sheet_state = "hidden"
+    path = str(tmp_path / "many.xlsx")
+    wb.save(path)
+    return path
+
+
+def _tabs_text(app):
+    from termxl.ui.widgets import SheetTabs
+    tabs = app.query_one("#tabs", SheetTabs)
+    return tabs, tabs.render().plain
+
+
+@pytest.mark.asyncio
+async def test_sheet_tabs_scroll(tmp_path):
+    app = TermXLApp(_many_sheets_file(tmp_path))
+    async with app.run_test(size=(60, 20)) as pilot:
+        await _ready(app, pilot)
+        tabs, text = _tabs_text(app)
+        assert text.startswith(" Sheet01 ") and "▶" in text and "◀" not in text
+        assert "Sheet15" not in text
+        # Switching to an off-screen sheet scrolls the strip so the active tab shows.
+        for _ in range(14):
+            await pilot.press("ctrl+pagedown")
+        await pilot.pause()
+        assert app.grid.sheet.name == "Sheet15"
+        tabs, text = _tabs_text(app)
+        assert "Sheet15" in text and "◀" in text and "▶" not in text and "Sheet01" not in text
+        # Mouse wheel / arrows scroll without changing the active sheet.
+        tabs.scroll_tabs(-100)
+        tabs, text = _tabs_text(app)
+        assert tabs.offset_idx == 0 and "Sheet01" in text and app.grid.sheet.name == "Sheet15"
+        await pilot.click("#tabs", offset=(1, 0))  # on Sheet01's tab
+        assert app.grid.sheet.name == "Sheet01"
+        right = next(x0 for x0, _, idx in tabs._spans if idx == -3)
+        await pilot.click("#tabs", offset=(right + 1, 0))
+        assert tabs.offset_idx == 1 and app.grid.sheet.name == "Sheet01"
+        tabs, text = _tabs_text(app)
+        assert text.startswith("◀ ")
+        left = next(x0 for x0, _, idx in tabs._spans if idx == -2)
+        await pilot.click("#tabs", offset=(left, 0))
+        assert tabs.offset_idx == 0
+        # Can't scroll past the point where the last tab is shown.
+        tabs.scroll_tabs(100)
+        _, text = _tabs_text(app)
+        assert "Sheet15" in text
+        offset = tabs.offset_idx
+        tabs.scroll_tabs(1)
+        assert tabs.offset_idx == offset
+
+
+@pytest.mark.asyncio
+async def test_sheet_tabs_fit_without_arrows(tmp_path):
+    app = TermXLApp(_many_sheets_file(tmp_path, n=3))
+    async with app.run_test(size=(100, 20)) as pilot:
+        await _ready(app, pilot)
+        _, text = _tabs_text(app)
+        assert "◀" not in text and "▶" not in text and "Sheet03" in text
+
+
+@pytest.mark.asyncio
+async def test_goto_sheet_picker(tmp_path):
+    from textual.command import CommandPalette
+    app = TermXLApp(_many_sheets_file(tmp_path, hidden=("Sheet12",)))
+    async with app.run_test(size=(80, 24)) as pilot:
+        await _ready(app, pilot)
+        app.goto_sheet()
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, CommandPalette)
+        await type_text(pilot, "Sheet14")
+        await pilot.pause(0.3)
+        await pilot.press("down", "enter")
+        await pilot.pause(0.1)
+        assert app.grid.sheet.name == "Sheet14"
+        _, text = _tabs_text(app)
+        assert "Sheet14" in text
+        # Picking a hidden sheet unhides it.
+        app.goto_sheet()
+        await pilot.pause(0.1)
+        await type_text(pilot, "Sheet12")
+        await pilot.pause(0.3)
+        await pilot.press("down", "enter")
+        await pilot.pause(0.1)
+        assert app.grid.sheet.name == "Sheet12"
+        assert app.grid.sheet.ws.sheet_state == "visible"
