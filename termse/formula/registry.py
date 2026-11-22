@@ -135,6 +135,28 @@ def to_array(ctx, v) -> Array:
     return Array([[v]])
 
 
+def shaped_array(ctx, v, trim_edges: bool = True) -> Array:
+    """Like to_array, for results whose shape matters (operators mapped over ranges, SORT,
+    FILTER...): a reference keeps its full size, including blank rows and columns past the
+    sheet's used area (as shared blank rows, so they're cheap). With trim_edges, references
+    running to the last row or column of the sheet (A:A, 1:1, A2:A1048576) stay trimmed to the
+    used area, so whole-column formulas don't work through a million blank rows."""
+    from ..model.refs import MAX_COL, MAX_ROW
+
+    a = to_array(ctx, v)
+    if not isinstance(v, RefValue):
+        return a
+    nr = a.nrows if trim_edges and v.r2 >= MAX_ROW else v.nrows
+    nc = a.ncols if trim_edges and v.c2 >= MAX_COL else v.ncols
+    rows = a.rows
+    if a.ncols < nc:
+        extra = [None] * (nc - a.ncols)
+        rows = [r + extra for r in rows]
+    if len(rows) < nr:
+        rows = rows + [[None] * nc] * (nr - len(rows))
+    return Array(rows) if rows is not a.rows else a
+
+
 def to_scalar(ctx, v):
     """Reduce a reference/array to one value (top-left, or implicit intersection)."""
     if isinstance(v, RefValue):

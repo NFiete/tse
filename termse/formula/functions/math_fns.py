@@ -6,7 +6,7 @@ import random
 from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, ROUND_HALF_UP, ROUND_UP, Decimal
 
 from ..errors import DIV0, NA, NUM, VALUE, ExcelError, XLError
-from ..registry import flatten, fn, make_criterion, numbers, to_array
+from ..registry import flatten, fn, make_criterion, numbers, shaped_array, to_array
 from ..values import MISSING, Array, RefValue, is_number, to_int, to_number
 
 
@@ -385,7 +385,7 @@ def lifts_criteria(first: int):
                     multi.append(k)
             if not multi:
                 return impl(ctx, *args)
-            arrs = [(k, to_array(ctx, args[k])) for k in multi]
+            arrs = [(k, shaped_array(ctx, args[k])) for k in multi]
             nr = max(a.nrows for _, a in arrs)
             nc = max(a.ncols for _, a in arrs)
             rows = []

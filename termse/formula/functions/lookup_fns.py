@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from ...model.refs import MAX_COL, MAX_ROW, col_letter, quote_sheet
 from ..errors import CALC, NA, NUM, REF, VALUE, ExcelError, XLError
-from ..registry import fn, lookup_equal, scalar_arg, to_array, to_scalar, wild_matcher
+from ..registry import fn, lookup_equal, scalar_arg, shaped_array, to_array, to_scalar, wild_matcher
 from ..values import MISSING, Array, RefValue, compare, to_bool, to_int, to_number, to_text, type_rank
 
 
@@ -344,7 +344,7 @@ def ADDRESS(ctx, row, col, abs_num=MISSING, a1=MISSING, sheet=MISSING):
 
 @fn("TRANSPOSE", kind="raw", min_args=1, max_args=1)
 def TRANSPOSE(ctx, arr):
-    a = to_array(ctx, arr)
+    a = shaped_array(ctx, arr)
     return Array([list(col) for col in zip(*a.rows)])
 
 
@@ -354,8 +354,8 @@ def TRANSPOSE(ctx, arr):
 
 @fn("FILTER", kind="raw", min_args=2, max_args=3)
 def FILTER(ctx, arr, include, if_empty=MISSING):
-    a = to_array(ctx, arr)
-    inc = to_array(ctx, include)
+    a = shaped_array(ctx, arr)
+    inc = shaped_array(ctx, include)
     rows = []
     if inc.ncols == 1 and inc.nrows == a.nrows:
         for row, flag in zip(a.rows, inc.rows):
@@ -378,7 +378,7 @@ def FILTER(ctx, arr, include, if_empty=MISSING):
 
 @fn("UNIQUE", kind="raw", min_args=1, max_args=3)
 def UNIQUE(ctx, arr, by_col=MISSING, exactly_once=MISSING):
-    a = to_array(ctx, arr)
+    a = shaped_array(ctx, arr)
     once = False if exactly_once is MISSING else to_bool(scalar_arg(ctx, exactly_once))
 
     def key(row):
@@ -402,7 +402,7 @@ def UNIQUE(ctx, arr, by_col=MISSING, exactly_once=MISSING):
 def SORT(ctx, arr, idx=MISSING, order=MISSING, by_col=MISSING):
     import functools
 
-    a = to_array(ctx, arr)
+    a = shaped_array(ctx, arr)
     i = 1 if idx is MISSING else to_int(scalar_arg(ctx, idx))
     desc = False if order is MISSING else to_number(scalar_arg(ctx, order)) < 0
 
@@ -430,16 +430,7 @@ def SEQUENCE(ctx, rows, cols=MISSING, start=MISSING, step=MISSING):
 def full_array(ctx, v) -> Array:
     """Like to_array, but a reference keeps its full size: blank rows and columns beyond the
     sheet's used area are included (as shared blank rows, so whole columns stay cheap)."""
-    a = to_array(ctx, v)
-    if not isinstance(v, RefValue):
-        return a
-    rows = a.rows
-    if a.ncols < v.ncols:
-        extra = [None] * (v.ncols - a.ncols)
-        rows = [r + extra for r in rows]
-    if len(rows) < v.nrows:
-        rows = rows + [[None] * v.ncols] * (v.nrows - len(rows))
-    return Array(rows) if rows is not a.rows else a
+    return shaped_array(ctx, v, trim_edges=False)
 
 
 def _opt_int(ctx, v):

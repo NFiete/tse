@@ -8,7 +8,7 @@ from .errors import CALC, DIV0, NA, NAME, NUM, REF, VALUE, ExcelError, Unsupport
 from .parser import (
     ArrayNode, Binary, Call, Const, Func, LocalNode, Missing, NameNode, Node, RefNode, StructRefNode, Unary,
 )
-from .registry import FUNCTIONS, to_array
+from .registry import FUNCTIONS, shaped_array
 from .values import MISSING, Array, FuncValue, LambdaValue, RefValue, compare, fix_number, to_number, to_text
 
 _NO_LOCALS: dict = {}
@@ -73,7 +73,7 @@ def lift(ctx: Ctx, fn, args: list, errors_ok: bool = False):
         args = [intersect(ctx, a) if isinstance(a, RefValue) and not a.is_cell else a for a in args]
         return lift(ctx, fn, args, errors_ok)
     ctx.arrays = True
-    arrs = [to_array(ctx, a) if _is_multi(a) else None for a in args]
+    arrs = [shaped_array(ctx, a) if _is_multi(a) else None for a in args]
     nr = max(a.nrows for a in arrs if a is not None)
     nc = max(a.ncols for a in arrs if a is not None)
     scal = [None if (a is None and args[i] is MISSING) else (_deref(ctx, args[i]) if a is None else None)

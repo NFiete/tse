@@ -296,3 +296,26 @@ def test_row_and_column_of_ranges_spill(ws):
     assert ws["H1"] == 55
     ws["H1"] = "=ROW(C7)+COLUMN(C7)"
     assert ws["H1"] == 10
+
+
+def test_ranges_past_the_used_area_keep_their_size(ws):
+    """Blank rows below the last used row still count when a range is mapped over or reshaped."""
+    ws["A1"] = "1"
+    ws["A2"] = "x"
+    ws["C1"] = '=SUM(IF(A1:A10="",1,0))'
+    assert ws["C1"] == 8
+    ws["C1"] = '=SUMPRODUCT(--(A1:A10=""))'
+    assert ws["C1"] == 8
+    ws["C1"] = "=ROWS(SORT(A1:A10))"
+    assert ws["C1"] == 10
+    ws["C1"] = "=COLUMNS(TRANSPOSE(A1:A10))"
+    assert ws["C1"] == 10
+    ws["C1"] = '=ROWS(FILTER(A1:A10,A1:A10=""))'
+    assert ws["C1"] == 8
+    ws["C1"] = "=ROWS(UNIQUE(A1:A10))"
+    assert ws["C1"] == 3
+    ws["E1"] = "=A1:A4&\"!\""
+    assert [ws[f"E{r}"] for r in range(1, 5)] == ["1!", "x!", "!", "!"]
+    # References that run to the end of the sheet stay trimmed to the used area.
+    ws["C1"] = "=ROWS(A:A+1)"
+    assert ws["C1"] == 4
