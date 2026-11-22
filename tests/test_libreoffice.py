@@ -94,12 +94,31 @@ FORMULAS = [
     "=INDEX(WRAPROWS(B2:B7,4),2,3)", '=INDEX(WRAPCOLS(A2:A7,4,"x"),3,2)', "=WRAPROWS(A2:C7,2)", "=WRAPROWS(B2:B7,0)",
     "=SUM(WRAPCOLS(C2:C7,5,0))", "=FORMULATEXT(D3)", "=FORMULATEXT(A3)", '=HYPERLINK("https://example.com","Example")',
     '=HYPERLINK("https://example.com")', "=AREAS(B2:D4)",
+    # database functions (criteria in J1:M3)
+    '=DSUM(A1:E7,"Qty",J1:L3)', '=DCOUNT(A1:E7,"Price",J1:K2)', '=DCOUNTA(A1:E7,"Name",J1:L3)',
+    '=DCOUNT(A1:E7,,J1:L3)', '=DAVERAGE(A1:E7,3,J1:L3)', '=DMAX(A1:E7,"Price",J1:J2)', '=DMIN(A1:E7,"price",J1:K2)',
+    '=DPRODUCT(A1:E7,2,J1:K2)', '=DSTDEV(A1:E7,"Qty",J1:L3)', '=DSTDEVP(A1:E7,"Qty",J1:L3)',
+    '=DVAR(A1:E7,"Price",J1:J2)', '=DVARP(A1:E7,"Price",J1:J2)', '=DGET(A1:E7,"Name",M1:M2)',
+    '=DGET(A1:E7,"Name",J1:L3)', '=DGET(A1:E7,"Name",K1:K2)', '=DSUM(A1:E7,"Nope",J1:L3)', '=DSUM(A1:E7,9,J1:L3)',
+    '=DSUM(A1:E7,"Qty",L1:L2)', '=DAVERAGE(A1:E7,"Qty",M1:M3)',
     # LET (LibreOffice doesn't have LAMBDA)
     "=LET(x,B2,y,x*2,x+y)", "=LET(r,B2:B7,SUM(r)/ROWS(r))", "=LET(x,1/0,5)",
 ]
 
+# Criteria for the database functions, in J1:M3 (text criteria use ="=x" because plain text is a
+# prefix match in Excel but a whole-cell match in LibreOffice).
+CRITERIA = [
+    ["Cat", "Qty", "Price", "Qty"],
+    ['="=fruit"', ">2", None, ">10"],
+    ['="=veg"', None, "<1", None],
+]
+
 # Where LibreOffice and Excel disagree, we follow Excel (Microsoft 365).
 EXCEL_DIFFERS = {
+    # DGET with several matching records: Excel documents #NUM!
+    '=DGET(A1:E7,"Name",J1:L3)': "#NUM!", '=DGET(A1:E7,"Name",K1:K2)': "#NUM!",
+    # a blank criteria row matches every record in Excel; LibreOffice skips it
+    '=DAVERAGE(A1:E7,"Qty",M1:M3)': 5.5,
     "=SUM((B2:B7>2)*C2:C7)": 5.65,        # dynamic-array evaluation; LibreOffice: #VALUE!
     "=SQRT(-1)": "#NUM!",                  # LibreOffice: #VALUE!
     "=DOLLAR(-1234.5)": "($1,234.50)",     # en-US currency format; LibreOffice: -$1,234.50
@@ -119,6 +138,9 @@ def test_against_libreoffice(tmp_path):
     ws.title = "T"
     for r, row in enumerate(DATA, 1):
         for c, v in enumerate(row, 1):
+            ws.cell(row=r, column=c, value=v)
+    for r, row in enumerate(CRITERIA, 1):
+        for c, v in enumerate(row, 10):
             ws.cell(row=r, column=c, value=v)
     for i, f in enumerate(FORMULAS, 1):
         ws.cell(row=i, column=8, value=to_storage(f))
