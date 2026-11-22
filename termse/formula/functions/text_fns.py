@@ -1,9 +1,9 @@
 """Text functions."""
 from __future__ import annotations
 
-from ..errors import NA, VALUE, XLError
-from ..registry import flatten, fn, scalar_arg, wildcard_regex
-from ..values import MISSING, parse_number_text, to_bool, to_int, to_number, to_text
+from ..errors import NA, VALUE, ExcelError, XLError
+from ..registry import flatten, fn, scalar_arg, shaped_array, vector, wildcard_regex
+from ..values import MISSING, Array, RefValue, parse_number_text, to_bool, to_int, to_number, to_text
 
 
 @fn("CONCATENATE", min_args=1, max_args=None)
@@ -272,22 +272,71 @@ def DOLLAR(x, decimals=2):
     return f"({s})" if v < 0 else s
 
 
-@fn("TEXTBEFORE")
-def TEXTBEFORE(text, delim, instance=1):
-    s, d = to_text(text), to_text(delim)
-    n = to_int(instance if instance is not None else 1)
-    parts = s.split(d)
-    if n == 0 or abs(n) >= len(parts):
-        raise XLError(NA)
-    return d.join(parts[:n]) if n > 0 else d.join(parts[:n])
+def _find_delimiter(s: str, delims: list[str], n: int, ignore_case: bool, match_end: bool):
+    """(start, length) of the n-th delimiter in s (counting from the end if n < 0), or None.
+    With match_end, the end of the text (or its start, counting from the end) counts as one more
+    delimiter."""
+    if ignore_case:
+        s, delims = s.lower(), [d.lower() for d in delims]
+    if "" in delims:
+        return (0, 0) if n > 0 else (len(s), 0)  # an empty delimiter matches straight away
+    matches = []  # non-overlapping, found left to right (also when counting from the end)
+    i = 0
+    while i < len(s):
+        d = next((d for d in delims if s.startswith(d, i)), None)
+        if d is None:
+            i += 1
+            continue
+        matches.append((i, len(d)))
+        i += len(d)
+    k = n - 1 if n > 0 else len(matches) + n
+    if 0 <= k < len(matches):
+        return matches[k]
+    if match_end and abs(n) == len(matches) + 1:
+        return (len(s), 0) if n > 0 else (0, 0)
+    return None
 
 
-@fn("TEXTAFTER")
-def TEXTAFTER(text, delim, instance=1):
-    s, d = to_text(text), to_text(delim)
-    n = to_int(instance if instance is not None else 1)
-    parts = s.split(d)
-    if n == 0 or abs(n) >= len(parts):
-        raise XLError(NA)
-    return d.join(parts[n:]) if n > 0 else d.join(parts[n:])
+def _text_around(ctx, after: bool, text, delimiter, instance, match_mode, match_end, if_not_found):
+    delims = [to_text(v) for v in vector(ctx, delimiter)] if isinstance(delimiter, (Array, RefValue)) \
+        else [to_text(scalar_arg(ctx, delimiter))]
+    n = 1 if instance is MISSING else to_int(scalar_arg(ctx, instance) or 0)
+    ignore_case = to_bool(scalar_arg(ctx, match_mode) or False)
+    at_end = to_bool(scalar_arg(ctx, match_end) or False)
+
+    def one(v):
+        if isinstance(v, ExcelError):
+            return v
+        s = to_text(v)
+        if n == 0 or abs(n) > len(s):
+            raise XLError(VALUE)
+        hit = _find_delimiter(s, delims, n, ignore_case, at_end)
+        if hit is None:
+            if if_not_found is not MISSING:
+                return scalar_arg(ctx, if_not_found)
+            raise XLError(NA)
+        i, length = hit
+        return s[i + length:] if after else s[:i]
+
+    if isinstance(text, Array) or (isinstance(text, RefValue) and not text.is_cell):
+        def safe(v):
+            try:
+                return one(v)
+            except XLError as e:
+                return e.err
+
+        return Array([[safe(v) for v in row] for row in shaped_array(ctx, text).rows])
+    return one(scalar_arg(ctx, text))
+
+
+@fn("TEXTBEFORE", kind="raw", min_args=2, max_args=6)
+def TEXTBEFORE(ctx, text, delimiter, instance=MISSING, match_mode=MISSING, match_end=MISSING,
+               if_not_found=MISSING):
+    return _text_around(ctx, False, text, delimiter, instance, match_mode, match_end, if_not_found)
+
+
+@fn("TEXTAFTER", kind="raw", min_args=2, max_args=6)
+def TEXTAFTER(ctx, text, delimiter, instance=MISSING, match_mode=MISSING, match_end=MISSING,
+              if_not_found=MISSING):
+    return _text_around(ctx, True, text, delimiter, instance, match_mode, match_end, if_not_found)
 

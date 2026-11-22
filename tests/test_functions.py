@@ -278,3 +278,25 @@ def test_excel_2013_functions_get_storage_prefix(name):
 
     assert to_storage(f"={name}(A1)") == f"=_xlfn.{name}(A1)"
     assert to_display(f"=_xlfn.{name}(A1)") == f"={name}(A1)"
+
+
+def test_textbefore_textafter(ev, ws):
+    assert ev('=TEXTBEFORE("a-b-c","-")') == "a"
+    assert ev('=TEXTBEFORE("a-b-c","-",-1)') == "a-b"
+    assert ev('=TEXTAFTER("a-b-c","-",2)') == "c"
+    assert ev('=TEXTAFTER("a-b-c","-",-2)') == "b-c"
+    assert ev('=TEXTBEFORE("a-b-c","-",3)') == NA
+    assert ev('=TEXTBEFORE("a-b-c","-",0)') == VALUE
+    assert ev('=TEXTBEFORE("a-b-c","-",3,0,1)') == "a-b-c"  # match_end: the end is a delimiter
+    assert ev('=TEXTAFTER("a-b-c","-",-3,0,1)') == "a-b-c"
+    assert ev('=TEXTAFTER("aXbxc","x",1,1)') == "bxc"  # match_mode 1: ignore case
+    assert ev('=TEXTBEFORE("aXbxc","x")') == "aXb"
+    assert ev('=TEXTBEFORE("a-b","x",1,0,0,"none")') == "none"
+    assert ev('=TEXTBEFORE("a-b+c",{"+","-"},2)') == "a-b"  # any of several delimiters
+    assert ev('=TEXTAFTER("aaaaa","aa",-1)') == "a"
+    assert ev('=TEXTBEFORE("abc","")') == ""
+    assert ev('=TEXTAFTER("abc","")') == "abc"
+    ws["A1"] = "x-1"
+    ws["A2"] = "y-2"
+    ws["B1"] = '=TEXTAFTER(A1:A2,"-")'
+    assert [ws["B1"], ws["B2"]] == ["1", "2"]
