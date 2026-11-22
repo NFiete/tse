@@ -13,6 +13,7 @@ import openpyxl
 import pytest
 
 from termxl.formula.errors import ExcelError
+from termxl.formula.parser import to_storage
 from termxl.io import xlsx
 
 SOFFICE = shutil.which("soffice") or shutil.which("libreoffice")
@@ -40,6 +41,7 @@ FORMULAS = [
     "=MEDIAN(B2:B7)", "=STDEV(B2:B7)", "=STDEVP(C2:C7)", "=VAR(B2:B7)", "=VARP(C2:C7)", "=LARGE(C2:C7,2)",
     "=SMALL(B2:B7,2)", "=RANK(7,B2:B7)", "=PERCENTILE(C2:C7,0.3)", "=QUARTILE(B2:B7,3)", "=MODE(1,2,2,3)",
     "=CORREL(B2:B7,C2:C7)", "=SLOPE(C2:C7,B2:B7)", "=INTERCEPT(C2:C7,B2:B7)", "=GEOMEAN(C2:C7)",
+    "=BINOM.DIST(3,10,0.35,FALSE)", "=BINOM.DIST(4,12,0.2,TRUE)", "=BINOMDIST(B4,B3,0.4,1)",
     '=IF(B2>2,"big","small")', '=IFERROR(1/0,"err")', "=AND(B2>1,C2<2)", "=OR(B2>100,C2<2)", "=NOT(FALSE)",
     '=CHOOSE(2,"a","b","c")', '=LEFT(A3,3)&RIGHT(A3,2)', '=MID("spreadsheet",3,4)', '=LEN(A6)', '=UPPER(A2)',
     '=PROPER("hello wORLD")', '=TRIM("  a  b  ")', '=SUBSTITUTE("a.b.c",".","-")', '=SUBSTITUTE("a.b.c",".","-",2)',
@@ -79,7 +81,7 @@ def test_against_libreoffice(tmp_path):
         for c, v in enumerate(row, 1):
             ws.cell(row=r, column=c, value=v)
     for i, f in enumerate(FORMULAS, 1):
-        ws.cell(row=i, column=8, value=f)
+        ws.cell(row=i, column=8, value=to_storage(f))
     wb.save(src)
 
     outdir = tmp_path / "lo"

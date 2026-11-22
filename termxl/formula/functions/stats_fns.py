@@ -6,7 +6,7 @@ from collections import Counter
 
 from ..errors import DIV0, NA, NUM, ExcelError, XLError
 from ..registry import flatten, fn, numbers, scalar_arg, to_array
-from ..values import MISSING, RefValue, compare, is_number, parse_number_text, to_int, to_number
+from ..values import MISSING, RefValue, compare, is_number, parse_number_text, to_bool, to_int, to_number
 from .math_fns import _cells_matching, _matching_values, _pairs, criteria_pairs
 
 
@@ -336,3 +336,28 @@ def GEOMEAN(ctx, *args):
     if not vals or any(v <= 0 for v in vals):
         raise XLError(NUM)
     return math.exp(math.fsum(math.log(v) for v in vals) / len(vals))
+
+
+def _binom_pmf(k: int, n: int, p: float) -> float:
+    if p == 0.0 or p == 1.0:
+        return 1.0 if k == (0 if p == 0.0 else n) else 0.0
+    try:
+        return float(math.comb(n, k)) * p**k * (1.0 - p) ** (n - k)
+    except OverflowError:
+        # Huge coefficients: work in log space.
+        lg = math.lgamma(n + 1) - math.lgamma(k + 1) - math.lgamma(n - k + 1)
+        return math.exp(lg + k * math.log(p) + (n - k) * math.log1p(-p))
+
+
+@fn("BINOM.DIST", "BINOMDIST", min_args=4, max_args=4)
+def BINOM_DIST(number_s, trials, probability_s, cumulative):
+    k, n = to_int(number_s), to_int(trials)
+    p = to_number(probability_s)
+    cum = to_bool(cumulative)
+    if n < 0 or k < 0 or k > n or not 0.0 <= p <= 1.0:
+        raise XLError(NUM)
+    if not cum:
+        return _binom_pmf(k, n, p)
+    if k == n:
+        return 1.0
+    return min(1.0, math.fsum(_binom_pmf(i, n, p) for i in range(k + 1)))

@@ -166,6 +166,25 @@ def test_stats(ev):
     assert ev("=QUARTILE(A1:A8,1)") == 4
 
 
+def test_binom_dist(ev):
+    assert ev("=BINOM.DIST(3,10,0.5,FALSE)") == pytest.approx(120 / 1024)
+    assert ev("=BINOM.DIST(3,10,0.5,TRUE)") == pytest.approx(176 / 1024)
+    assert ev("=BINOMDIST(3.9,10,0.5,0)") == pytest.approx(120 / 1024)  # number_s truncated
+    assert ev("=BINOM.DIST(10,10,0.3,TRUE)") == 1
+    assert ev("=BINOM.DIST(0,5,0,FALSE)") == 1
+    assert ev("=BINOM.DIST(5,5,1,FALSE)") == 1
+    assert ev("=BINOM.DIST(500,2000,0.25,FALSE)") == pytest.approx(0.02059757143332068, rel=1e-12)
+    for bad in ("=BINOM.DIST(11,10,0.5,FALSE)", "=BINOM.DIST(-1,10,0.5,FALSE)", "=BINOM.DIST(1,10,1.5,FALSE)"):
+        assert str(ev(bad)) == "#NUM!"
+
+
+def test_binom_dist_storage_prefix():
+    from termxl.formula.parser import to_display, to_storage
+    assert to_storage("=BINOM.DIST(1,2,0.5,FALSE)") == "=_xlfn.BINOM.DIST(1,2,0.5,FALSE)"
+    assert to_storage("=BINOMDIST(1,2,0.5,FALSE)") == "=BINOMDIST(1,2,0.5,FALSE)"
+    assert to_display("=_xlfn.BINOM.DIST(1,2,0.5,FALSE)") == "=BINOM.DIST(1,2,0.5,FALSE)"
+
+
 def test_arrays(ev):
     cells = {"A1": "1", "A2": "2", "A3": "3", "B1": "4", "B2": "5", "B3": "6"}
     assert ev("=SUMPRODUCT(A1:A3,B1:B3)", **cells) == 32
