@@ -118,9 +118,9 @@ def parse_number_text(s: str):
     m = _NUM_RE.match(s)
     if m:
         sign, body, exp, pct = m.groups()
-        v = float(body.replace(",", ""))
-        if exp:
-            v *= 10 ** int(exp)
+        v = float(body.replace(",", "") + ("e" + exp if exp else ""))
+        if math.isinf(v):
+            return None
         if sign == "-":
             v = -v
         if pct:

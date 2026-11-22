@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import math
 import re
 from dataclasses import dataclass
 
@@ -133,9 +134,9 @@ def parse_input(text: str, epoch1904: bool = False) -> Parsed:
     m = _RE_NUM.match(s)
     if m and bool(m.group("neg")) == bool(m.group("neg2")):
         body = m.group("body")
-        v = float(body.replace(",", ""))
-        if m.group("exp"):
-            v *= 10 ** int(m.group("exp"))
+        v = float(body.replace(",", "") + ("e" + m.group("exp") if m.group("exp") else ""))
+        if math.isinf(v):
+            return Parsed("text", text)  # too big for a number (Excel keeps it as text)
         negative = bool(m.group("neg")) or m.group("sign") == "-" or m.group("sign2") == "-"
         if negative:
             v = -v

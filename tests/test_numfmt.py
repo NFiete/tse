@@ -79,6 +79,8 @@ def test_is_date_format():
     ("=A1", "formula", "=A1", None),
     ("hello", "text", "hello", None),
     ("1e3", "number", 1000.0, "0.00E+00"),
+    ("1e400", "text", "1e400", None),  # too big: kept as text instead of crashing
+    ("-2E+309", "text", "-2E+309", None),
 ])
 def test_parse_input(text, kind, value, fmt):
     p = parse_input(text)

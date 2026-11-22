@@ -36,6 +36,12 @@ def test_aggregates_ignore_text_in_ranges(ev):
     assert ev("=COUNTBLANK(A1:A6)") == 1
 
 
+def test_huge_number_text(ev):
+    assert ev('=VALUE("1e400")') == VALUE
+    assert ev('="1e400"+1') == VALUE
+    assert ev('=VALUE("1.5e2")') == 150
+
+
 def test_error_propagation(ev):
     assert ev("=SUM(A1:A2)", A1="=1/0", A2="1") == DIV0
     assert ev("=IFERROR(A1,0)") == 0
