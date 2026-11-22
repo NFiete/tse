@@ -5,6 +5,7 @@ import math
 import random
 from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, ROUND_HALF_UP, ROUND_UP, Decimal
 
+from ...model.refs import MAX_COL, MAX_ROW
 from ..errors import DIV0, NA, NUM, VALUE, ExcelError, XLError
 from ..registry import flatten, fn, make_criterion, numbers, shaped_array, to_array
 from ..values import MISSING, Array, RefValue, is_number, to_int, to_number
@@ -339,12 +340,14 @@ def SUMSQ(ctx, *args):
 
 @fn("SUMPRODUCT", kind="raw", min_args=1)
 def SUMPRODUCT(ctx, *args):
-    arrs = [to_array(ctx, a) for a in args]
+    arrs = [shaped_array(ctx, a) for a in args]
     nr, nc = arrs[0].nrows, arrs[0].ncols
-    for a in arrs:
-        if a.nrows != nr or a.ncols != nc:
-            # clipped whole-column refs may differ: pad to the largest shape with blanks
-            nr, nc = max(nr, a.nrows), max(nc, a.ncols)
+    if any(a.nrows != nr or a.ncols != nc for a in arrs):
+        # Arrays of different sizes are an error, but whole-column references are trimmed to
+        # the used area (which can differ between sheets): pad those with blanks.
+        if not any(isinstance(a, RefValue) and (a.r2 >= MAX_ROW or a.c2 >= MAX_COL) for a in args):
+            raise XLError(VALUE)
+        nr, nc = max(a.nrows for a in arrs), max(a.ncols for a in arrs)
     total = 0.0
     all_int = True
     for i in range(nr):

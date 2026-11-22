@@ -227,6 +227,10 @@ def test_arrays(ev):
     cells = {"A1": "1", "A2": "2", "A3": "3", "B1": "4", "B2": "5", "B3": "6"}
     assert ev("=SUMPRODUCT(A1:A3,B1:B3)", **cells) == 32
     assert ev("=SUMPRODUCT((A1:A3>1)*(B1:B3))") == 11
+    assert ev("=SUMPRODUCT(A1:A3,B1:B2)") == VALUE  # different sizes
+    assert ev("=SUMPRODUCT(A1:A3,{1;2})") == VALUE
+    assert ev("=SUMPRODUCT(A1:A4,B1:B4)") == 32
+    assert ev("=SUMPRODUCT(A:A,B:B)") == 32
     assert ev("=SUM(A1:A3*B1:B3)") == 32
     assert ev("=SUM({1,2;3,4})") == 10
     assert ev("=SUM(FILTER(B1:B3,A1:A3>1))") == 11
