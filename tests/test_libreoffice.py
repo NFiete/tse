@@ -94,6 +94,8 @@ FORMULAS = [
     "=INDEX(WRAPROWS(B2:B7,4),2,3)", '=INDEX(WRAPCOLS(A2:A7,4,"x"),3,2)', "=WRAPROWS(A2:C7,2)", "=WRAPROWS(B2:B7,0)",
     "=SUM(WRAPCOLS(C2:C7,5,0))", "=FORMULATEXT(D3)", "=FORMULATEXT(A3)", '=HYPERLINK("https://example.com","Example")',
     '=HYPERLINK("https://example.com")', "=AREAS(B2:D4)",
+    # LET (LibreOffice doesn't have LAMBDA)
+    "=LET(x,B2,y,x*2,x+y)", "=LET(r,B2:B7,SUM(r)/ROWS(r))", "=LET(x,1/0,5)",
 ]
 
 # Where LibreOffice and Excel disagree, we follow Excel (Microsoft 365).

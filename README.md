@@ -25,7 +25,9 @@ available. Run it from the source tree with `./txl` or `python3 -m termxl`.
   text, date/time, information), Excel's type coercion and error values, ranges across sheets,
   defined names, array arithmetic (`SUMPRODUCT((A:A>5)*B:B)`), dynamic arrays that spill into
   neighbouring cells (`=SORT(FILTER(A2:C99,C2:C99>0))`, `=A2:A10*2`, spill references like
-  `=SUM(E2#)`, `@` for implicit intersection), and circular-reference detection. Results Excel saved in the file are shown as-is until
+  `=SUM(E2#)`, `@` for implicit intersection), `LET` and `LAMBDA` (including LAMBDAs stored in
+  defined names, and the helpers MAP, REDUCE, SCAN, BYROW, BYCOL and MAKEARRAY), and
+  circular-reference detection. Results Excel saved in the file are shown as-is until
   something they depend on changes.
 - **Excel-style editing.** Type to replace a cell, F2 to edit it. Arrow keys (or the mouse)
   insert references while you write a formula, and F4 toggles `$`. Excel number formats are
@@ -69,8 +71,7 @@ Press **F1** for the key reference and **Ctrl+P** for the command palette.
   `#SPILL!` if something is in the way (the status bar says where). Ordinary formulas in a file
   that predate dynamic arrays keep the older behaviour (a range gives the value in the
   formula's row, as Excel shows with `=@...`), and old Ctrl+Shift+Enter array formulas fill their
-  fixed range. GROUPBY and PIVOTBY accept built-in functions such as `SUM` or `PERCENTOF` but not
-  `LAMBDA`.
+  fixed range.
 - Legacy `.xls` and `.xlsb` aren't supported. Convert them first:
   `soffice --headless --convert-to xlsx file.xls`.
 - Ctrl+I only reaches the app in terminals with the kitty keyboard protocol; elsewhere use Alt+I.

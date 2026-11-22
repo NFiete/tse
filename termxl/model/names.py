@@ -9,7 +9,7 @@ from openpyxl.workbook.defined_name import DefinedName
 
 from ..formula.errors import Unsupported
 from ..formula.parser import (
-    NAMET, FormulaSyntaxError, RefInfo, normalize, parse, rewrite_tokens, to_display, to_storage, transform_refs,
+    FUNC, NAMET, FormulaSyntaxError, RefInfo, normalize, parse, rewrite_tokens, to_display, to_storage, transform_refs,
 )
 from .refs import parse_addr, quote_sheet
 from .undo import UndoEntry
@@ -167,6 +167,9 @@ def _rename_in_formulas(book, old: str, new: str, scope) -> dict:
                 continue
 
             def fn(t, s=s, local=local):
+                if t.kind == FUNC and t.value.lower() == low:  # calling a LAMBDA name
+                    ok = (s is scope) if scope is not None else not local
+                    return new + "(" if ok else None
                 if t.kind != NAMET or t.value.lower() != low:
                     return None
                 if t.sheet is not None:
@@ -178,7 +181,7 @@ def _rename_in_formulas(book, old: str, new: str, scope) -> dict:
                     return None
                 return t.text[: len(t.text) - len(t.value)] + new
 
-            text = rewrite_tokens(cell._value, fn)
+            text = rewrite_tokens(cell._value, fn, skip_locals=True)
             if text != cell._value:
                 changed[(s, r, c)] = cell._value
                 cell._value = text

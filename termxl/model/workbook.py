@@ -702,6 +702,12 @@ class Workbook:
             ref_nodes, name_nodes, funcs, dyn, sref_nodes = ev.analyze(f.ast)
             functions = ev.FUNCTIONS
             unsupported = [n for n in funcs if n not in functions]
+            if unsupported:
+                # MYFUNC(1) calls the LAMBDA in a defined name: depend on what the name uses
+                named = [n for n in unsupported if self.resolve_name(n, sheet, None, tables=False) is not None]
+                if named:
+                    unsupported = [n for n in unsupported if n not in named]
+                    name_nodes = name_nodes + [NameNode(n) for n in named]
             f.unsupported = sorted(unsupported) if unsupported else []
             f.volatile = dyn or any(functions[n].volatile for n in funcs if n in functions)
             f.positional = "ROW" in funcs or "COLUMN" in funcs or "CELL" in funcs
@@ -744,6 +750,10 @@ class Workbook:
                 self._sref_dep(n.ref, sheet, r, c, out)
             elif t is NameNode and depth < 20:
                 target = self.resolve_name(n.name, sheet, n.sheet)
+                if target is not None:
+                    dynamic |= self._collect_refs(target, sheet, out, depth + 1, r, c)
+            elif t is Func and depth < 20 and n.name not in ev.FUNCTIONS:
+                target = self.resolve_name(n.name, sheet, None, tables=False)  # a LAMBDA name
                 if target is not None:
                     dynamic |= self._collect_refs(target, sheet, out, depth + 1, r, c)
             elif t is Binary and n.op == ":" and not (type(n.left) in ev._STATIC_REFS

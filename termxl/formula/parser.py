@@ -489,10 +489,102 @@ def canonical_func_name(raw: str) -> str:
     return name
 
 
+class LocalNode(Node):
+    """A LET name or LAMBDA parameter (declaration or use). key is the upper-case name."""
+
+    __slots__ = ("name", "key")
+
+    def __init__(self, name: str):
+        self.name, self.key = name, local_key(name)
+
+    def __repr__(self):
+        return f"Local({self.name})"
+
+
+class Call(Node):
+    """Calling a function value: LAMBDA(x,x+1)(2), or f(2) where f is a LET name."""
+
+    __slots__ = ("callee", "args")
+
+    def __init__(self, callee: Node, args: list[Node]):
+        self.callee, self.args = callee, args
+
+    def __repr__(self):
+        return f"Call({self.callee!r}, {', '.join(map(repr, self.args))})"
+
+
+def local_key(name: str) -> str:
+    """Upper-case name without the _xlpm. prefix files use for LET names and LAMBDA parameters."""
+    up = name.upper()
+    return up[6:] if up.startswith("_XLPM.") else up
+
+
+_MAX_PARAMS = 253
+
+
+def _bind(node: Node, scope: frozenset) -> Node:
+    """Resolve LET names and LAMBDA parameters: their declarations and uses become LocalNodes,
+    calls of them become Call nodes. Raises FormulaSyntaxError for malformed LET/LAMBDA."""
+    t = type(node)
+    if t is NameNode:
+        if node.sheet is None and local_key(node.name) in scope:
+            return LocalNode(node.name)
+        return node
+    if t is Func:
+        name = node.name
+        if name == "LET":
+            args = node.args
+            if len(args) < 3 or len(args) % 2 == 0:
+                raise FormulaSyntaxError("LET needs name, value pairs followed by a calculation")
+            out = []
+            for i in range(0, len(args) - 1, 2):
+                decl = _declared(args[i])
+                out.append(decl)
+                out.append(_bind(args[i + 1], scope))
+                scope = scope | {decl.key}
+            out.append(_bind(args[-1], scope))
+            return Func(name, out, node.raw_name)
+        if name == "LAMBDA":
+            args = node.args
+            if not args or len(args) - 1 > _MAX_PARAMS:
+                raise FormulaSyntaxError("LAMBDA needs a calculation as its last argument")
+            params = [_declared(a) for a in args[:-1]]
+            keys = {p.key for p in params}
+            if len(keys) != len(params):
+                raise FormulaSyntaxError("LAMBDA parameter names must be different")
+            return Func(name, params + [_bind(args[-1], scope | keys)], node.raw_name)
+        args = [_bind(a, scope) for a in node.args]
+        if scope and local_key(node.raw_name) in scope and not node.raw_name.upper().startswith(("_XLFN.", "_XLWS.")):
+            return Call(LocalNode(node.raw_name), args)
+        node.args = args
+        return node
+    if t is Call:
+        node.callee = _bind(node.callee, scope)
+        node.args = [_bind(a, scope) for a in node.args]
+        return node
+    if t is Binary:
+        node.left = _bind(node.left, scope)
+        node.right = _bind(node.right, scope)
+        return node
+    if t is Unary:
+        node.arg = _bind(node.arg, scope)
+        return node
+    return node
+
+
+def _declared(node: Node) -> LocalNode:
+    if type(node) is NameNode and node.sheet is None and "." not in local_key(node.name):
+        return LocalNode(node.name)
+    if type(node) is LocalNode:  # shadowing an outer name
+        return node
+    raise FormulaSyntaxError("LET names and LAMBDA parameters must be names such as x or rate")
+
+
 class _Parser:
     def __init__(self, toks: list[Token]):
         self.toks = toks
         self.i = 0
+        self.binders = False  # saw LET, LAMBDA or a call: names need resolving
 
     def peek(self) -> Token | None:
         return self.toks[self.i] if self.i < len(self.toks) else None
@@ -516,6 +608,8 @@ class _Parser:
         node = self.expr(0)
         if self.i != len(self.toks):
             raise FormulaSyntaxError(f"Unexpected {self.toks[self.i].text!r}")
+        if self.binders:
+            node = _bind(node, frozenset())
         return node
 
     def expr(self, min_bp: int) -> Node:
@@ -552,7 +646,10 @@ class _Parser:
         if k == REFT:
             return RefNode(t.ref)
         if k == NAMET:
-            return NameNode(t.value, t.sheet)
+            name = t.value
+            if t.sheet is None and name[:6].upper() == "_XLPM.":
+                name = name[6:]
+            return NameNode(name, t.sheet)
         if k == SREFT:
             return StructRefNode(t.value)
         if k == OP and t.text in "+-":
@@ -564,19 +661,37 @@ class _Parser:
         if k == LP:
             node = self.expr(0)
             self.expect(RP)
-            return node
+            return self.calls(node)
         if k == FUNC:
-            return self.func(t)
+            return self.calls(self.func(t))
         if k == LBRACE:
             return self.array()
         raise FormulaSyntaxError(f"Unexpected {t.text!r}")
 
+    def calls(self, node: Node) -> Node:
+        """Postfix call syntax, as in LAMBDA(x,x+1)(2)."""
+        while (nt := self.peek()) is not None and nt.kind == LP:
+            self.i += 1
+            self.binders = True
+            node = Call(node, self.arguments())
+        return node
+
     def func(self, t: Token) -> Node:
+        raw = t.value
+        if raw[:6].upper() == "_XLPM.":
+            raw = raw[6:]
+        name = canonical_func_name(raw)
+        if name == "LET" or name == "LAMBDA":
+            self.binders = True
+        return Func(name, self.arguments(), raw)
+
+    def arguments(self) -> list[Node]:
+        """Arguments up to and including the closing ')' (the '(' is already consumed)."""
         args: list[Node] = []
         nt = self.peek()
         if nt is not None and nt.kind == RP:
             self.i += 1
-            return Func(canonical_func_name(t.value), args, t.value)
+            return args
         while True:
             nt = self.peek()
             if nt is None:
@@ -591,7 +706,7 @@ class _Parser:
             if nt.kind == RP:
                 break
             raise FormulaSyntaxError(f"Unexpected {nt.text!r} in function arguments")
-        return Func(canonical_func_name(t.value), args, t.value)
+        return args
 
     def array(self) -> Node:
         rows: list[list] = [[]]
@@ -643,8 +758,50 @@ def ref_text(info: RefInfo) -> str:
     return f"{p}{'$' if info.ar1 else ''}{info.r1}:{'$' if info.ar2 else ''}{info.r2}"
 
 
-def rewrite_tokens(formula: str, fn) -> str:
-    """Rebuild formula text, replacing each token for which fn(token) returns a string."""
+def local_tokens(toks: list[Token]) -> set[int]:
+    """Indexes of the name and function tokens that declare or use LET names and LAMBDA
+    parameters (the ones files spell with _xlpm.)."""
+    found: set[int] = set()
+    if not any(t.kind == FUNC and canonical_func_name(t.value) in ("LET", "LAMBDA") for t in toks):
+        return found
+    # One frame per open bracket: [function name or None, argument index, declared names]
+    stack: list[list] = []
+    visible: set[str] = set()
+    n = len(toks)
+    for i, t in enumerate(toks):
+        k = t.kind
+        if k == FUNC:
+            if t.value[:6].upper() != "_XLPM." and local_key(t.value) not in visible:
+                stack.append([canonical_func_name(t.value), 0, set()])
+                continue
+            found.add(i)
+            stack.append([None, 0, set()])
+        elif k in (LP, LBRACE):
+            stack.append([None, 0, set()])
+        elif k in (RP, RBRACE):
+            if stack:
+                stack.pop()
+                visible = set().union(*(f[2] for f in stack))
+        elif k == COMMA:
+            if stack:
+                stack[-1][1] += 1
+        elif k == NAMET and t.sheet is None:
+            key = local_key(t.value)
+            frame = stack[-1] if stack else None
+            whole_arg = (i > 0 and toks[i - 1].kind in (FUNC, COMMA) and i + 1 < n and toks[i + 1].kind == COMMA)
+            if frame is not None and whole_arg and (
+                    (frame[0] == "LET" and frame[1] % 2 == 0) or frame[0] == "LAMBDA"):
+                frame[2].add(key)
+                visible.add(key)
+                found.add(i)
+            elif key in visible or t.value[:6].upper() == "_XLPM.":
+                found.add(i)
+    return found
+
+
+def rewrite_tokens(formula: str, fn, skip_locals: bool = False) -> str:
+    """Rebuild formula text, replacing each token for which fn(token) returns a string.
+    skip_locals=True leaves LET names and LAMBDA parameters alone."""
     if not formula.startswith("="):
         return formula
     body = formula[1:]
@@ -652,8 +809,11 @@ def rewrite_tokens(formula: str, fn) -> str:
         toks = tokenize(body)
     except (FormulaSyntaxError, Unsupported):
         return formula
+    skip = local_tokens(toks) if skip_locals else ()
     out, pos, changed = [], 0, False
-    for t in toks:
+    for i, t in enumerate(toks):
+        if i in skip:
+            continue
         new = fn(t)
         if new is not None and new != t.text:
             out.append(body[pos:t.start])
@@ -759,6 +919,8 @@ XLFN_FUNCS = {
     # dynamic-array and lookup functions
     "TAKE", "DROP", "VSTACK", "HSTACK", "TOCOL", "TOROW", "CHOOSEROWS", "CHOOSECOLS", "EXPAND", "WRAPROWS",
     "WRAPCOLS", "FORMULATEXT", "GROUPBY", "PIVOTBY", "TRIMRANGE", "PERCENTOF",
+    # LAMBDA helpers
+    "MAP", "REDUCE", "SCAN", "BYROW", "BYCOL", "MAKEARRAY", "ISOMITTED",
     # statistical functions added in Excel 2010-2016
     "BETA.DIST", "BETA.INV", "BINOM.DIST.RANGE", "BINOM.INV", "CHISQ.DIST", "CHISQ.DIST.RT", "CHISQ.INV",
     "CHISQ.INV.RT", "CHISQ.TEST", "CONFIDENCE.NORM", "CONFIDENCE.T", "COVARIANCE.P", "COVARIANCE.S",
@@ -788,7 +950,7 @@ def normalize(formula: str) -> str:
             return t.text.upper()
         return None
 
-    return rewrite_tokens(formula, fn)
+    return rewrite_tokens(formula, fn, skip_locals=True)
 
 
 def _operand_end(toks: list[Token], i: int) -> int:
@@ -803,6 +965,9 @@ def _operand_end(toks: list[Token], i: int) -> int:
     if toks[j].kind in (FUNC, LP, LBRACE):
         close = _match_close(toks, j)
         j = n - 1 if close is None else close
+        while j + 1 < n and toks[j + 1].kind == LP:  # LAMBDA(x,x)(1)
+            close = _match_close(toks, j + 1)
+            j = n - 1 if close is None else close
     if j + 1 < n and toks[j + 1].kind == OP and toks[j + 1].text == "#":
         j += 1
     if j + 2 < n and toks[j + 1].kind == OP and toks[j + 1].text == ":":
@@ -848,9 +1013,15 @@ def to_storage(formula: str) -> str:
         return formula
     stack: list = []  # enclosing function names (None for plain parentheses and array constants)
     repl: dict[int, str] = {}
+    local = local_tokens(toks)
     for i, t in enumerate(toks):
         new = None
-        if t.kind == SREFT:
+        if i in local:
+            if t.kind == FUNC:
+                stack.append(None)
+            if t.text[:6].upper() != "_XLPM.":
+                new = "_xlpm." + t.text
+        elif t.kind == SREFT:
             new = sref_text(t.value, storage=True) if "thisrow" in t.value.items else None
         elif t.kind in (LP, LBRACE):
             stack.append(None)
@@ -911,7 +1082,10 @@ def to_display(formula: str) -> str:
         if t.kind == SREFT:
             new = sref_text(t.value) if "thisrow" in t.value.items else None
         elif t.kind == NAMET:
-            new = t.text[7:] if t.text[:7].upper() == "_XLETA." else None
+            pfx = t.text[:7].upper()
+            new = t.text[7:] if pfx == "_XLETA." else t.text[6:] if pfx[:6] == "_XLPM." else None
+        elif t.kind == FUNC and t.text[:6].upper() == "_XLPM.":
+            new = t.text[6:]
         elif t.kind == FUNC:
             canon = canonical_func_name(t.text[:-1])
             new = canon + "(" if canon != t.text[:-1].upper() else None
@@ -944,6 +1118,6 @@ def is_error_literal(text: str) -> ExcelError | None:
 
 
 __all__ = [
-    "parse", "tokenize", "StructRef", "StructRefNode", "sref_text", "SREFT", "FormulaSyntaxError", "Unsupported", "translate", "transform_refs",
+    "parse", "tokenize", "LocalNode", "Call", "local_tokens", "StructRef", "StructRefNode", "sref_text", "SREFT", "FormulaSyntaxError", "Unsupported", "translate", "transform_refs",
     "normalize", "to_storage", "to_display", "RefInfo", "ref_text", "REF",
 ]

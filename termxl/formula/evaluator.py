@@ -4,20 +4,27 @@ from __future__ import annotations
 import math
 
 from . import functions  # noqa: F401  (registers all functions)
-from .errors import DIV0, NA, NAME, NUM, REF, VALUE, ExcelError, Unsupported, XLError
-from .parser import ArrayNode, Binary, Const, Func, Missing, NameNode, Node, RefNode, StructRefNode, Unary
+from .errors import CALC, DIV0, NA, NAME, NUM, REF, VALUE, ExcelError, Unsupported, XLError
+from .parser import (
+    ArrayNode, Binary, Call, Const, Func, LocalNode, Missing, NameNode, Node, RefNode, StructRefNode, Unary,
+)
 from .registry import FUNCTIONS, to_array
-from .values import MISSING, Array, FuncValue, RefValue, compare, fix_number, to_number, to_text
+from .values import MISSING, Array, FuncValue, LambdaValue, RefValue, compare, fix_number, to_number, to_text
+
+_NO_LOCALS: dict = {}
+MAX_LAMBDA_DEPTH = 1000  # nested LAMBDA calls (recursion through a defined name) before #NUM!
 
 
 class Ctx:
     """Evaluation context: the engine plus the formula cell's position."""
 
-    __slots__ = ("engine", "sheet", "row", "col", "depth", "arrays", "legacy")
+    __slots__ = ("engine", "sheet", "row", "col", "depth", "arrays", "legacy", "env", "calls")
 
     def __init__(self, engine, sheet, row: int, col: int):
         self.engine, self.sheet, self.row, self.col = engine, sheet, row, col
         self.depth = 0
+        self.env = _NO_LOCALS  # LET names and LAMBDA parameters in scope: key -> value
+        self.calls = 0  # LAMBDA call depth
         # Set when evaluation worked on arrays (an operator or function mapped over a range, or a
         # function returned an array): the formula needs dynamic-array semantics.
         self.arrays = False
@@ -172,6 +179,12 @@ def evaluate(node: Node, ctx: Ctx):
         return RefValue(sheet, node.r1, node.c1, node.r2, node.c2)
     if t is Func:
         return _call(node, ctx)
+    if t is LocalNode:
+        v = ctx.env.get(node.key, NAME)
+        return v
+    if t is Call:
+        f = evaluate(node.callee, ctx)
+        return invoke(ctx, f, [evaluate(a, ctx) for a in node.args])
     if t is StructRefNode:
         return ctx.engine.resolve_sref(node.ref, ctx.sheet, ctx.row, ctx.col)
     if t is Binary:
@@ -201,18 +214,88 @@ def evaluate(node: Node, ctx: Ctx):
                 if fv is not None:
                     return fv
             return NAME
-        ctx.depth += 1
-        try:
-            if ctx.depth > 50:
-                return REF
-            return evaluate(target, ctx)
-        finally:
-            ctx.depth -= 1
+        return _eval_name(ctx, target)
     if t is ArrayNode:
         return Array([list(r) for r in node.rows])
     if t is Missing:
         return MISSING
     raise Unsupported(f"Cannot evaluate {node!r}")
+
+
+def _eval_name(ctx: Ctx, target: Node):
+    """Evaluate a defined name's formula (which can't see the caller's LET names)."""
+    ctx.depth += 1
+    env, ctx.env = ctx.env, _NO_LOCALS
+    try:
+        if ctx.depth > 50:
+            return REF
+        return evaluate(target, ctx)
+    finally:
+        ctx.depth -= 1
+        ctx.env = env
+
+
+def _let(node: Func, ctx: Ctx):
+    args = node.args
+    env = dict(ctx.env)
+    saved = ctx.env
+    try:
+        for i in range(0, len(args) - 1, 2):
+            ctx.env = env
+            v = evaluate(args[i + 1], ctx)
+            env = dict(env)
+            env[args[i].key] = v
+        ctx.env = env
+        return evaluate(args[-1], ctx)
+    finally:
+        ctx.env = saved
+
+
+def _lambda(node: Func, ctx: Ctx):
+    return LambdaValue(tuple(p.key for p in node.args[:-1]), node.args[-1], ctx.env)
+
+
+_SYNTAX = {"LET": _let, "LAMBDA": _lambda}
+
+
+def arity(f) -> tuple[int, int | None]:
+    """(minimum, maximum) number of arguments a function value takes."""
+    if isinstance(f, LambdaValue):
+        return len(f.params), len(f.params)
+    return f.spec.min_args, f.spec.max_args
+
+
+def is_callable(v) -> bool:
+    return isinstance(v, (LambdaValue, FuncValue))
+
+
+def invoke(ctx: Ctx, f, args: list):
+    """Call a LAMBDA or function value with evaluated arguments; returns a value (errors as
+    values). Anything else gives #VALUE! (or the error it is)."""
+    if isinstance(f, LambdaValue):
+        if len(args) != len(f.params):
+            return VALUE
+        if ctx.calls >= MAX_LAMBDA_DEPTH:
+            return NUM
+        env = dict(f.env)
+        env.update(zip(f.params, args))
+        saved = ctx.env
+        ctx.env = env
+        ctx.calls += 1
+        try:
+            return evaluate(f.body, ctx)
+        except RecursionError:
+            return NUM
+        finally:
+            ctx.calls -= 1
+            ctx.env = saved
+    if isinstance(f, FuncValue):
+        return call_function(ctx, f, args)
+    if isinstance(f, RefValue) and f.is_cell:
+        f = ctx.engine.get_value(f.sheet, f.r1, f.c1)
+    if isinstance(f, ExcelError):
+        return f
+    return VALUE
 
 
 def function_value(name: str) -> FuncValue | None:
@@ -243,9 +326,12 @@ def call_function(ctx: Ctx, fv: FuncValue, args: list):
 
 
 def _call(node: Func, ctx: Ctx):
+    special = _SYNTAX.get(node.name)
+    if special is not None:
+        return special(node, ctx)
     spec = FUNCTIONS.get(node.name)
     if spec is None:
-        raise Unsupported(node.name)
+        return _call_named(node, ctx)
     n = len(node.args)
     if n < spec.min_args or (spec.max_args is not None and n > spec.max_args):
         return VALUE
@@ -263,6 +349,20 @@ def _call(node: Func, ctx: Ctx):
             ctx.legacy = True
         return _apply(spec, ctx, args)
     return _apply(spec, ctx, [evaluate(a, ctx) for a in node.args])
+
+
+def _call_named(node: Func, ctx: Ctx):
+    """A call such as MYFUNC(1) where MYFUNC is a defined name holding a LAMBDA."""
+    resolve = getattr(ctx.engine, "resolve_name", None)
+    target = resolve(node.name, ctx.sheet, None, tables=False) if resolve is not None else None
+    if target is None:
+        raise Unsupported(node.name)
+    f = _eval_name(ctx, target)
+    if isinstance(f, ExcelError):
+        return f
+    if not is_callable(f):
+        return NAME
+    return invoke(ctx, f, [evaluate(a, ctx) for a in node.args])
 
 
 def _apply(spec, ctx: Ctx, args: list):
@@ -320,6 +420,8 @@ def _cell_value(v, blank=0):
         return blank
     if isinstance(v, FuncValue):
         return NAME
+    if isinstance(v, LambdaValue):
+        return CALC
     if type(v) is float and (math.isnan(v) or math.isinf(v)):
         return NUM
     return v
@@ -365,6 +467,10 @@ def walk(node: Node):
     if t is Func:
         for a in node.args:
             yield from walk(a)
+    elif t is Call:
+        yield from walk(node.callee)
+        for a in node.args:
+            yield from walk(a)
     elif t is Binary:
         yield from walk(node.left)
         yield from walk(node.right)
@@ -402,6 +508,9 @@ def analyze(node: Node):
             refs.append(n)
         elif t is Func:
             funcs.add(n.name)
+            stack.extend(n.args)
+        elif t is Call:
+            push(n.callee)
             stack.extend(n.args)
         elif t is Binary:
             if n.op == ":" and not (type(n.left) in _STATIC_REFS and type(n.right) in _STATIC_REFS):

@@ -5,7 +5,7 @@ import functools
 
 from ..errors import CALC, VALUE, ExcelError, XLError
 from ..registry import fn, scalar_arg, to_array
-from ..values import MISSING, Array, FuncValue, RefValue, is_number, to_bool, to_int
+from ..values import MISSING, Array, FuncValue, LambdaValue, RefValue, is_number, to_bool, to_int
 from .lookup_fns import sort_cmp
 
 
@@ -49,14 +49,15 @@ def _norm(v):
 # ------------------------------------------------------------------ argument handling
 
 
-def _functions(f) -> list[FuncValue]:
-    if isinstance(f, FuncValue):
+def _functions(f) -> list:
+    """The function argument: a function value or LAMBDA, or a row or column of them."""
+    if isinstance(f, (FuncValue, LambdaValue)):
         return [f]
     if isinstance(f, ExcelError):
         raise XLError(f)
     if isinstance(f, Array) and (f.nrows == 1 or f.ncols == 1):
         items = list(f.flat())
-        if items and all(isinstance(x, FuncValue) for x in items):
+        if items and all(isinstance(x, (FuncValue, LambdaValue)) for x in items):
             return items
     raise XLError(VALUE)
 
@@ -210,17 +211,19 @@ def _entries(root: _Group, nfields: int, depth: int, table: bool) -> list[tuple[
 
 
 class _Aggregator:
-    def __init__(self, ctx, values: Array, funcs: list[FuncValue]):
-        from ..evaluator import call_function
+    def __init__(self, ctx, values: Array, funcs: list):
+        from ..evaluator import invoke
 
-        self.ctx, self.funcs, self.call = ctx, funcs, call_function
+        self.ctx, self.funcs, self.call = ctx, funcs, invoke
         self.cols = [list(c) for c in zip(*values.rows)] if values.rows else []
         self.cache: dict = {}
 
-    def __call__(self, rows: list[int], j: int, f: FuncValue, total_rows: list[int] | None):
+    def __call__(self, rows: list[int], j: int, f, total_rows: list[int] | None):
+        from ..evaluator import arity
+
         col = self.cols[j]
         args = [Array([[col[i]] for i in rows])]
-        if f.spec.min_args >= 2:
+        if arity(f)[0] >= 2:  # PERCENTOF, or a LAMBDA(values, all_values)
             args.append(Array([[col[i]] for i in total_rows] or [[None]]))
         r = self.call(self.ctx, f, args)
         if isinstance(r, Array):
@@ -241,7 +244,7 @@ class _Aggregator:
         return get
 
 
-def _labels(funcs: list[FuncValue], vheaders: list, nv: int) -> list:
+def _labels(funcs: list, vheaders: list, nv: int) -> list:
     if len(funcs) == 1:
         return list(vheaders)
     if nv == 1:

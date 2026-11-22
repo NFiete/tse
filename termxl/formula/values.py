@@ -80,6 +80,20 @@ class FuncValue:
         return f"FuncValue({self.name})"
 
 
+class LambdaValue:
+    """A LAMBDA: parameter keys (upper-case names), the body, and the LET names and parameters
+    visible where it was created."""
+
+    __slots__ = ("params", "body", "env")
+    name = "LAMBDA"
+
+    def __init__(self, params: tuple, body, env: dict):
+        self.params, self.body, self.env = params, body, env
+
+    def __repr__(self):
+        return f"LambdaValue({', '.join(self.params)})"
+
+
 def is_number(v) -> bool:
     t = type(v)
     return t is int or t is float
@@ -259,6 +273,6 @@ def values_equal(a, b) -> bool:
 
 
 __all__ = [
-    "MISSING", "RefValue", "Array", "FuncValue", "to_number", "to_int", "to_text", "to_bool", "compare",
+    "MISSING", "RefValue", "Array", "FuncValue", "LambdaValue", "to_number", "to_int", "to_text", "to_bool", "compare",
     "fix_number", "is_number", "check_error", "parse_number_text", "DIV0", "NA",
 ]
