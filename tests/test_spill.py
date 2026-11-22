@@ -342,6 +342,44 @@ def test_legacy_array_formula(tmp_path):
         assert "cm=" not in z.read("xl/worksheets/sheet1.xml").decode()
 
 
+def test_legacy_array_formula_structural_edits(tmp_path):
+    """Inserting/deleting rows and renaming sheets rewrite Ctrl+Shift+Enter array formulas and
+    move their ranges along."""
+    from termse.model import structure
+
+    wb = openpyxl.Workbook()
+    w = wb.active
+    w.title = "S"
+    for i in range(1, 4):
+        w.cell(i, 1, i)
+    w["C1"] = ArrayFormula("C1:C3", "=A1:A3*10")
+    w2 = wb.create_sheet("T")
+    w2["A1"] = ArrayFormula("A1", "=SUM(S!A1:A3)")
+    p = str(tmp_path / "cse.xlsx")
+    wb.save(p)
+    book = xlsx.load(p)
+    s, t = book.sheets
+    structure.insert(book, s, "row", 1, 2)
+    assert s.formulas[(3, 3)].text == "=A3:A5*10"
+    assert [book.get_value(s, r, 3) for r in range(3, 6)] == [10, 20, 30]
+    assert t.formulas[(1, 1)].text == "=SUM(S!A3:A5)"
+    assert book.get_value(t, 1, 1) == 6
+    book.set_input(s, 4, 1, "5")
+    assert book.get_value(s, 4, 3) == 50 and book.get_value(t, 1, 1) == 9
+    xlsx.save(book, p)
+    saved = openpyxl.load_workbook(p)["S"]
+    assert saved["C3"].value.ref == "C3:C5" and saved["C3"].value.text == "=A3:A5*10"
+    structure.rename_sheet(book, s, "New")
+    assert t.formulas[(1, 1)].text == "=SUM(New!A3:A5)"
+    assert book.get_value(t, 1, 1) == 9
+    structure.delete(book, s, "row", 1, 1)
+    assert s.formulas[(2, 3)].text == "=A2:A4*10"
+    assert book.get_value(s, 3, 3) == 50
+    book.do_undo()
+    assert s.formulas[(3, 3)].array and s.formulas[(3, 3)].text == "=A3:A5*10"
+    assert [book.get_value(s, r, 3) for r in range(3, 6)] == [10, 50, 30]
+
+
 @pytest.mark.asyncio
 async def test_ui_spilled_range():
     from termse.ui.app import TermSEApp

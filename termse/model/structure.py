@@ -6,6 +6,7 @@ from copy import copy
 from openpyxl.cell.cell import MergedCell
 from openpyxl.worksheet.cell_range import CellRange, MultiCellRange
 from openpyxl.worksheet.dimensions import ColumnDimension
+from openpyxl.worksheet.formula import ArrayFormula
 
 from ..formula.parser import RefInfo, to_display, to_storage, transform_refs, transform_refs_tokens
 from . import tables
@@ -72,6 +73,23 @@ def _rebuild_col_dims(ws, mapping: dict[int, ColumnDimension]):
 
 
 # --------------------------------------------------------------------------- reference shifting
+
+
+def _formula_of(cell) -> str | None:
+    """Storage text of a cell's formula (plain or legacy array formula), or None."""
+    v = cell._value
+    if isinstance(v, str):
+        return v if cell.data_type == "f" else None
+    if isinstance(v, ArrayFormula):
+        t = v.text or ""
+        return t if t.startswith("=") else "=" + t
+    return None
+
+
+def _with_text(value, text: str):
+    """A cell value like `value` holding formula text `text`. Array formulas get a new object:
+    undo snapshots may still share the old one."""
+    return ArrayFormula(value.ref, text) if isinstance(value, ArrayFormula) else text
 
 
 def _shift_fn(axis: str, idx: int, n: int):
@@ -185,6 +203,8 @@ def _move_cells(sheet, axis: str, idx: int, n: int) -> dict:
         nr, nc = (key[0] + n, key[1]) if axis == "row" else (key[0], key[1] + n)
         cell.row, cell.column = nr, nc
         moved[(nr, nc)] = cell
+        if isinstance(cell._value, ArrayFormula):
+            cell._value = _moved_array(cell._value, nr, nc)
         if getattr(cell, "_hyperlink", None) is not None:
             cell._hyperlink.ref = cell.coordinate
     ws._cells.update(moved)
@@ -205,6 +225,20 @@ def _move_cells(sheet, axis: str, idx: int, n: int) -> dict:
     sheet.cached = remap(sheet.cached)
     sheet.stale = set(remap({k: 1 for k in sheet.stale}))
     return deleted
+
+
+def _moved_array(value: ArrayFormula, r: int, c: int) -> ArrayFormula:
+    """A legacy array formula whose anchor cell moved to (r, c): its range moves along."""
+    from openpyxl.utils.cell import range_boundaries
+
+    try:
+        c1, r1, c2, r2 = range_boundaries(value.ref)
+    except (TypeError, ValueError):
+        c1 = r1 = c2 = r2 = 1
+    ref = f"{col_letter(c)}{r}"
+    if (r2, c2) != (r1, c1):
+        ref += f":{col_letter(c + c2 - c1)}{r + r2 - r1}"
+    return ArrayFormula(ref, value.text)
 
 
 def _copy_formats(sheet, axis: str, src: int, idx: int, n: int):
@@ -346,13 +380,14 @@ def _rewrite_all(book, target_sheet, axis: str, idx: int, f) -> tuple[dict, bool
             if fobj.ast is not None and refs is not None and not _affected(refs, target_sheet, axis, idx):
                 continue
             cell = cells.get(rc)
-            if cell is None or not isinstance(cell._value, str):
+            old = None if cell is None else _formula_of(cell)
+            if old is None:
                 continue
-            old = cell._value
             damage: list = []
             new, toks = _transform_formula(old, s, target_sheet, book, axis, f, with_tokens=True, damage=damage)
             if new != old:
-                cell._value = new
+                old = cell._value
+                cell._value = _with_text(old, new)
                 changed[(s, rc[0], rc[1])] = old
                 if toks is not None:
                     book._pending_tokens[cell] = toks
@@ -415,7 +450,7 @@ def _reindex(book, sheet, axis: str, idx: int, n: int, changed_pre: dict, names_
             cell = sheet.ws._cells.get(new_rc)
             if cell is not None and cell._value is not None:
                 book._register(sheet, new_rc[0], new_rc[1], _formula_text(cell._value),
-                               tokens=book._pending_tokens.get(cell))
+                               array=isinstance(cell._value, ArrayFormula), tokens=book._pending_tokens.get(cell))
             changed_post.add((sheet, new_rc[0], new_rc[1]))
         else:
             formulas[new_rc] = fobj
@@ -428,7 +463,8 @@ def _reindex(book, sheet, axis: str, idx: int, n: int, changed_pre: dict, names_
         value = s.values.get((r, c))
         book._unregister(s, r, c, keep_spill=value is not None)
         if cell is not None and cell._value is not None:
-            book._register(s, r, c, _formula_text(cell._value), tokens=book._pending_tokens.get(cell))
+            book._register(s, r, c, _formula_text(cell._value), array=isinstance(cell._value, ArrayFormula),
+                           tokens=book._pending_tokens.get(cell))
             if value is not None:
                 s.values[(r, c)] = value  # shifting references doesn't change the result
         changed_post.add(key)
@@ -576,7 +612,7 @@ def delete(book, sheet, axis: str, idx: int, n: int = 1, record: bool = True):
             book._unregister(s, r, c)
             cell = s.ws._cells.get((r, c))
             if cell is not None and cell.data_type == "f" and cell._value is not None:
-                book._register(s, r, c, _formula_text(cell._value))
+                book._register(s, r, c, _formula_text(cell._value), array=isinstance(cell._value, ArrayFormula))
         sheet.recompute_bounds()
         book.tables_changed(restored)
 
@@ -653,10 +689,11 @@ def remove_sheet(book, sheet, record: bool = True):
             if s is sheet:
                 continue
             for (r, c), cell in list(s.ws._cells.items()):
-                if cell.data_type == "f" and isinstance(cell._value, str):
-                    new = transform_refs(to_display(cell._value), fn_factory(s))
-                    if new != to_display(cell._value):
-                        cell._value = to_storage(new)
+                text = _formula_of(cell)
+                if text is not None:
+                    new = transform_refs(to_display(text), fn_factory(s))
+                    if new != to_display(text):
+                        cell._value = _with_text(cell._value, to_storage(new))
     book.graph.remove_sheet(sheet)
     book.wb.remove(sheet.ws)
     book.sheets.remove(sheet)
@@ -686,11 +723,12 @@ def rename_sheet(book, sheet, new_name: str, record: bool = True):
 
     for s in book.sheets:
         for (r, c), cell in list(s.ws._cells.items()):
-            if cell.data_type == "f" and isinstance(cell._value, str) and old.lower() in cell._value.lower():
-                disp = to_display(cell._value)
+            text = _formula_of(cell)
+            if text is not None and old.lower() in text.lower():
+                disp = to_display(text)
                 new = transform_refs(disp, fn_factory(s))
                 if new != disp:
-                    cell._value = to_storage(new)
+                    cell._value = _with_text(cell._value, to_storage(new))
     for dn in _defined_names(book):
         txt = "=" + (dn.attr_text or "")
         new = transform_refs(txt, fn_factory(None))

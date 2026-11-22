@@ -6,6 +6,7 @@ from copy import copy
 from dataclasses import dataclass
 
 from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.worksheet.formula import ArrayFormula
 
 from ..formula.errors import Unsupported
 from ..formula.parser import (
@@ -204,7 +205,7 @@ def _refresh(book, names: set[str], extra_keys=()):
         cell = s.ws._cells.get((r, c))
         book._unregister(s, r, c)
         if cell is not None and cell.data_type == "f" and cell._value is not None:
-            book._register(s, r, c, _formula_text(cell._value))
+            book._register(s, r, c, _formula_text(cell._value), array=isinstance(cell._value, ArrayFormula))
     if dirty:
         dirty |= book.graph.all_dependents(dirty)
         book._run(dirty)
