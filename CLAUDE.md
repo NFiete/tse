@@ -112,6 +112,10 @@ deliberate performance measure for large workbooks; keep it when touching those 
 ### UI (`ui/`)
 - `app.py` `TermXLApp`: key bindings, edit mode (including "point mode" where arrows insert
   references into a formula), clipboard, dialogs, status bar; calls into model functions.
+- `vi.py` `ViKeys`: optional vi-style keys (`app.vi`, None in Excel mode). `Grid.on_key` offers
+  every key to `ViKeys.handle` first; unclaimed keys fall through to the Excel bindings. The
+  preference is stored by `termxl/settings.py` (`$XDG_CONFIG_HOME/term_xl/settings.json`); tests
+  point `XDG_CONFIG_HOME` at a temp dir (autouse fixture in `conftest.py`).
 - `grid.py` `Grid`: virtualized line-by-line rendering (`render_line`), selection, frozen panes.
   When a sheet has outlines, `Layout.co_h` band lines sit above the column header and a
   `Layout.ro_w` gutter left of the row numbers, so screen y/x don't map 1:1 to the header/cells;

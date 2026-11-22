@@ -576,7 +576,14 @@ class Grid(Widget, can_focus=True):
     # ------------------------------------------------------------------ input
 
     async def on_key(self, event: events.Key) -> None:
-        if event.is_printable and event.character and not any(
+        vi = self.app.vi
+        if vi is not None and self.app.editing is None and vi.handle(event):
+            event.stop()
+            event.prevent_default()
+            return
+        if vi is not None and event.key == "backspace":
+            return
+        if vi is None and event.is_printable and event.character and not any(
                 event.key.startswith(m) for m in ("ctrl+", "alt+", "super+", "meta+")):
             event.stop()
             event.prevent_default()
@@ -597,6 +604,8 @@ class Grid(Widget, can_focus=True):
             return
         self.focus()
         app = self.app
+        if app.vi is not None and not event.shift:
+            app.vi.visual = None
         if h[0] == "cell" and app.editing is not None and app.can_point():
             app.point_at(h[1], h[2], extend=event.shift)
             self._dragging, self._drag_mode = True, "point"

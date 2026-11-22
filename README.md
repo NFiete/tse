@@ -6,6 +6,7 @@ A spreadsheet for the terminal that opens, edits and saves real Excel files.
 ./txl budget.xlsx          # open a workbook
 ./txl new.xlsx             # start a new one (created on first Ctrl+S)
 ./txl data.csv --sheet X   # CSV/TSV work too
+./txl --vi budget.xlsx     # vi-style keys
 ```
 
 It needs Python 3.11+ with `textual` and `openpyxl`. On Arch these are the system packages
@@ -52,6 +53,12 @@ available. Run it from the source tree with `./txl` or `python3 -m termxl`.
   Excel, typing just below or right of a table extends it, a formula typed into an empty column
   fills the whole column, renaming a header updates the formulas that use it, and inserted rows
   get the column formulas. Table styles aren't drawn: cells show their own formatting.
+
+- **Vi keys, if you prefer them.** Start with `--vi`, or pick "Use vi keys" in the command
+  palette (remembered in `~/.config/term_xl/settings.json`). `hjkl`, `w`/`b`/`{`/`}`, `gg`/`G`,
+  counts, `v`/`V` selection, `i`/`a`/`=` to edit (Esc confirms), `dd`/`x`, `yy`, `p`, `dr`/`yr`
+  for whole rows, `u`/`Ctrl+R`, `/` search with `n`/`N`, marks, and `:w`, `:q`, `:wq`, `:e`,
+  `:B12`. Ctrl shortcuts vi doesn't use keep their Excel meaning. `:set novi` switches back.
 
 Press **F1** for the key reference and **Ctrl+P** for the command palette.
 

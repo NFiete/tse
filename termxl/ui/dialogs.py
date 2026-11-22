@@ -106,6 +106,48 @@ class InputDialog(ModalScreen):
         self.dismiss(None)
 
 
+class _CommandInput(Input):
+    async def _on_key(self, event: events.Key) -> None:
+        if event.key == "backspace" and not self.value:
+            event.stop()
+            event.prevent_default()
+            self.screen.dismiss(None)
+            return
+        await super()._on_key(event)
+
+
+class CommandLine(ModalScreen):
+    """A vi-style one-line prompt at the bottom of the screen (for : commands and / searches)."""
+
+    DEFAULT_CSS = """
+    CommandLine { align: left bottom; background: transparent; }
+    CommandLine #cmdrow { height: 1; width: 100%; background: $surface; }
+    CommandLine #prompt { width: 1; height: 1; text-style: bold; }
+    CommandLine Input { height: 1; width: 1fr; border: none; padding: 0; background: $surface; }
+    CommandLine Input:focus { border: none; }
+    """
+    BINDINGS = [Binding("escape", "cancel", show=False)]
+
+    def __init__(self, prompt: str = ":"):
+        super().__init__()
+        self._prompt = prompt
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="cmdrow"):
+            yield Static(self._prompt, id="prompt")
+            yield _CommandInput(id="cmd")
+
+    def on_mount(self):
+        self.query_one("#cmd", Input).focus()
+
+    @on(Input.Submitted)
+    def submit(self, event: Input.Submitted):
+        self.dismiss(event.value)
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
 class ChoiceDialog(ModalScreen):
     DEFAULT_CSS = DIALOG_CSS
     BINDINGS = [Binding("escape", "cancel", show=False),
@@ -266,6 +308,36 @@ HELP_TEXT = """\
 """
 
 
+VI_HELP_TEXT = """\
+[b]Vi keys[/b]  (on; turn off with :set novi or "Use Excel keys" in Ctrl+P)
+  h j k l  arrows  Space        move (a count repeats: 5j)
+  w b / { }                     jump to the edge of the data right/left / up/down
+  0 ^ / $                       first column / last used column in the row
+  gg / G  (5G or :5)            first / last used row (or row 5);  3| goes to column C
+  H M L                         top / middle / bottom of the screen
+  Ctrl+F Ctrl+B / Ctrl+D Ctrl+U page down/up / half page;  Ctrl+E Ctrl+Y scroll
+  zz zt zb                      scroll the cursor to the middle / top / bottom
+  v  V  Ctrl+V                  select cells / whole rows / cells (Esc ends)
+  i a A I                       edit the cell (I puts the cursor at the start)
+  s S C cc  =                   replace the cell's contents / start a formula
+  Esc while editing             confirm the edit (Esc again after an error discards it)
+  o / O                         insert a row below / above and start typing in it
+  x  dd                         delete the cells' contents (p puts them back)
+  dr dc  /  yr yc               delete / yank whole rows or columns (3dr: three rows)
+  yy  Y                         yank the cell or selection
+  p  P                          put; yanked rows/columns are inserted below/above (right/left)
+  u  Ctrl+R                     undo / redo
+  /text  ?text  n  N            search down / up, next / previous match
+  gt gT  (3gt)                  next / previous sheet (sheet 3)
+  zc zo / zM zR                 collapse / expand the group at the cursor / all groups
+  ma  'a                        set mark a / jump to it
+  :w \\[file]  :q  :wq  :x  :q!   save, quit (ZZ = :x, ZQ = :q!);  :e file, :sav file
+  :B12  :Sheet2!A1  :Rate       go to a cell, range or name;  :sort  :sort! sort the selection
+  Ctrl+… shortcuts not listed here keep their Excel meaning (Ctrl+Z, Ctrl+S, Ctrl+C, Ctrl+G…)
+
+"""
+
+
 class HelpScreen(ModalScreen):
     DEFAULT_CSS = DIALOG_CSS + """
     HelpScreen #dialog { height: 90%; }
@@ -273,11 +345,15 @@ class HelpScreen(ModalScreen):
     """
     BINDINGS = [Binding("escape,f1,q", "close", show=False)]
 
+    def __init__(self, vi: bool = False):
+        super().__init__()
+        self._vi = vi
+
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label("term_xl — keyboard reference", classes="title")
             with VerticalScroll(id="helpbody"):
-                yield Static(HELP_TEXT)
+                yield Static((VI_HELP_TEXT if self._vi else "") + HELP_TEXT)
             with Horizontal(classes="buttons"):
                 yield Button("Close", variant="primary", id="close")
 

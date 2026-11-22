@@ -34,6 +34,12 @@ class Sheetish:
         return self.sheet.number_format(r, c)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_settings(tmp_path_factory, monkeypatch):
+    """Never read or write the real ~/.config/term_xl/settings.json from tests."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("config")))
+
+
 @pytest.fixture
 def ws():
     return Sheetish(new_workbook())

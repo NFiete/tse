@@ -120,13 +120,15 @@ class StatusBar(Static):
     StatusBar { height: 1; width: 1fr; background: $boost; color: $text-muted; }
     """
 
-    def show(self, mode: str, message: str, stats: str, file_label: str):
+    def show(self, mode: str, message: str, stats: str, file_label: str, keys: str = ""):
         w = self.size.width or 80
         left = Text()
         left.append(f" {mode} ", style="bold reverse")
         left.append(" ")
         left.append(message)
         right = Text()
+        if keys:
+            right.append(keys + "   ", style="bold")
         if stats:
             right.append(stats + "   ")
         right.append(file_label, style="bold")

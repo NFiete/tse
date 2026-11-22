@@ -16,6 +16,7 @@ from ..format.numfmt import format_value
 from ..formula.errors import ExcelError
 from ..formula.parser import REFT, SREFT, FormulaSyntaxError, Unsupported, tokenize
 from ..formula.registry import wildcard_regex
+from .. import settings
 from ..io import xlsx
 from ..model import names, outline, structure, tables
 from ..model.refs import MAX_COL, MAX_ROW, Rect, addr, col_letter, quote_sheet
@@ -24,6 +25,7 @@ from .dialogs import (
 )
 from .grid import Grid
 from .theme import DARK, LIGHT
+from .vi import ViKeys
 from .widgets import FormulaHighlighter, FormulaInput, NameBox, SheetTabs, StatusBar, cycle_absolute
 
 _ARROWS = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
@@ -62,6 +64,7 @@ class EditState:
     c: int
     mode: str  # 'enter' | 'edit' | 'point'
     original: str
+    discard_on_escape: bool = False  # vi keys: Esc confirms unless that already failed
 
 
 class TermXLApp(App):
@@ -96,6 +99,8 @@ class TermXLApp(App):
         Binding("ctrl+d", "fill('down')", "Fill down", show=False),
         Binding("ctrl+r", "fill('right')", "Fill right", show=False),
         Binding("ctrl+f", "find", "Find"),
+        Binding("slash", "vi_search", "Find", key_display="/"),
+        Binding("colon", "vi_command", "Command", key_display=":"),
         Binding("ctrl+h", "replace", "Replace", show=False),
         Binding("ctrl+g", "goto", "Go to"),
         Binding("ctrl+pageup", "sheet(-1)", show=False),
@@ -115,8 +120,12 @@ class TermXLApp(App):
         Binding("ctrl+q", "quit_app", "Quit", priority=True),
     ]
 
-    def __init__(self, path: str | None = None, sheet: str | None = None):
+    def __init__(self, path: str | None = None, sheet: str | None = None, vi: bool | None = None):
+        """vi: use vi-style keys; None means the saved preference."""
         super().__init__()
+        if vi is None:
+            vi = settings.load().get("keys") == "vi"
+        self.vi: ViKeys | None = ViKeys(self) if vi else None
         self.path_arg = path
         self.sheet_arg = sheet
         self.book = None
@@ -283,7 +292,7 @@ class TermXLApp(App):
         if self.book is None:
             return
         g = self.grid
-        mode = "READY"
+        mode = "READY" if self.vi is None else self.vi.mode_label
         if self.editing is not None:
             mode = "POINT" if self.point else self.editing.mode.upper()
         msg = self.message
@@ -323,7 +332,8 @@ class TermXLApp(App):
         book = self.book
         name = os.path.basename(book.path) if book.path else "untitled"
         label = ("● " if book.modified else "") + name
-        self.query_one("#status", StatusBar).show(mode, msg, self._selection_stats(), label)
+        keys = self.vi.showcmd if self.vi is not None and self.editing is None else ""
+        self.query_one("#status", StatusBar).show(mode, msg, self._selection_stats(), label, keys)
 
     def set_message(self, msg: str):
         self.message = msg
@@ -490,6 +500,12 @@ class TermXLApp(App):
             self.commit_edit((0, -1))
             return True
         if key == "escape":
+            if self.vi is not None and not e.discard_on_escape:
+                # vi: Esc leaves "insert mode" keeping what was typed (u undoes it)
+                if not self.commit_edit(move=None):
+                    e.discard_on_escape = True
+                    self.notify("Fix the formula, or press Esc again to discard the edit.", timeout=6)
+                return True
             self.cancel_edit()
             return True
         if key == "f2":
@@ -1818,7 +1834,37 @@ class TermXLApp(App):
         self._confirm_discard(self.exit)
 
     def action_help(self):
-        self.push_screen(HelpScreen())
+        self.push_screen(HelpScreen(vi=self.vi is not None))
+
+    # ------------------------------------------------------------------ vi keys
+
+    def set_vi(self, on: bool, save: bool = True):
+        """Switch between vi-style and Excel-style keys (and remember the choice)."""
+        if on and self.vi is None:
+            self.vi = ViKeys(self)
+        elif not on and self.vi is not None:
+            self.vi.exit_visual(collapse=False)
+            self.vi = None
+        if save:
+            settings.update(keys="vi" if on else "excel")
+        self.refresh_bindings()
+        self.set_message("Vi keys on — press F1 for the list, :set novi to turn them off" if on
+                         else "Excel keys on")
+
+    def check_action(self, action: str, parameters) -> bool | None:
+        if action in ("vi_search", "vi_command"):
+            return self.vi is not None
+        if action == "find" and self.vi is not None:
+            return False  # Ctrl+F pages down in vi mode; the footer shows / instead
+        return True
+
+    def action_vi_search(self):
+        if self.vi is not None and self._need_grid():
+            self.vi.search_prompt(1)
+
+    def action_vi_command(self):
+        if self.vi is not None and self._need_grid():
+            self.vi.command_prompt()
 
     def action_toggle_paper(self):
         g = self.grid
@@ -1919,6 +1965,12 @@ class TermXLApp(App):
         yield C("Replace…", "Find and replace (Ctrl+H)", self.action_replace)
         yield C("Toggle light or dark grid", "Switch between a dark grid and a white paper-like grid",
                 self.action_toggle_paper)
+        if self.vi is None:
+            yield C("Use vi keys", "hjkl to move, i to edit, : commands, / to search (remembered)",
+                    lambda: self.set_vi(True))
+        else:
+            yield C("Use Excel keys", "Typing replaces the cell, arrows move (remembered)",
+                    lambda: self.set_vi(False))
         yield C("Keyboard help", "Show keyboard shortcuts (F1)", self.action_help)
         yield from super().get_system_commands(screen)
 
