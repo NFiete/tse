@@ -162,6 +162,19 @@ def test_insert_delete_columns(ws):
     assert ws["C1"] == REF
 
 
+def test_undo_delete_restores_formats_exactly(ws):
+    b, s = ws.book, ws.sheet
+    ws["A5"] = "x"
+    b.toggle_font(s, Rect(5, 1, 5, 1), "bold")
+    ws["B6"] = "y"
+    structure.delete(b, s, "row", 6, 1)
+    b.do_undo()
+    assert ws["B6"] == "y"
+    assert s.ws._cells.get((6, 1)) is None  # not given row 5's bold font
+    structure.insert(b, s, "row", 6, 1)
+    assert s.ws._cells[(6, 1)].font.b  # inserting still copies the row above
+
+
 def test_merged_cells_shift(ws):
     b = ws.book
     ws["A2"] = "title"

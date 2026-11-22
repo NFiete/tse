@@ -564,20 +564,20 @@ def _dirty_after(book, sheet, axis: str, idx: int, n: int, changed_post: set) ->
     return dirty
 
 
-def _apply(book, sheet, axis: str, idx: int, n: int, table_fill: bool = True):
+def _apply(book, sheet, axis: str, idx: int, n: int, table_fill: bool = True, copy_formats: bool = True):
     """Shared implementation of insert (n > 0) and delete (n < 0)."""
     with paused_gc():
-        return _apply_inner(book, sheet, axis, idx, n, table_fill)
+        return _apply_inner(book, sheet, axis, idx, n, table_fill, copy_formats)
 
 
-def _apply_inner(book, sheet, axis: str, idx: int, n: int, table_fill: bool = True):
+def _apply_inner(book, sheet, axis: str, idx: int, n: int, table_fill: bool = True, copy_formats: bool = True):
     f = _shift_fn(axis, idx, n)
     has_tables = bool(book.table_index().by_name)
     spill_anchors = book.take_spills(sheet)  # recalculated below, once cells have moved
     changed_pre, names_changed = _rewrite_all(book, sheet, axis, idx, f)
     deleted = _move_cells(sheet, axis, idx, n)
     removed_dims = _shift_dims(sheet, axis, idx, n)
-    if n > 0 and idx > 1:
+    if n > 0 and idx > 1 and copy_formats:
         _copy_formats(sheet, axis, idx - 1, idx, n)
     _shift_merged(sheet, axis, idx, n)
     _shift_misc(sheet, axis, idx, n)
@@ -613,15 +613,17 @@ def _apply_inner(book, sheet, axis: str, idx: int, n: int, table_fill: bool = Tr
     return damaged_pre, deleted, removed_dims
 
 
-def insert(book, sheet, axis: str, idx: int, n: int = 1, record: bool = True, table_fill: bool = True):
+def insert(book, sheet, axis: str, idx: int, n: int = 1, record: bool = True, table_fill: bool = True,
+           copy_formats: bool = True):
     """Insert n empty rows (axis='row') or columns before index idx.
 
-    New rows inside a table get its calculated-column formulas unless table_fill is False."""
+    New rows inside a table get its calculated-column formulas unless table_fill is False, and
+    the formatting of the row/column before them unless copy_formats is False."""
     limit = MAX_ROW if axis == "row" else MAX_COL
     used = sheet.max_row if axis == "row" else sheet.max_col
     if used + n > limit:
         raise ValueError("That would push data off the end of the sheet")
-    _apply(book, sheet, axis, idx, n, table_fill)
+    _apply(book, sheet, axis, idx, n, table_fill, copy_formats)
     if record:
         where = (sheet.name, Rect(idx, 1, idx + n - 1, MAX_COL) if axis == "row" else Rect(1, idx, MAX_ROW, idx + n - 1))
         book.undo.push(UndoEntry(f"Insert {axis}s", lambda: delete(book, sheet, axis, idx, n, record=False),
@@ -644,7 +646,7 @@ def delete(book, sheet, axis: str, idx: int, n: int = 1, record: bool = True):
     def undo():
         from .workbook import _formula_text
 
-        insert(book, sheet, axis, idx, n, record=False, table_fill=False)
+        insert(book, sheet, axis, idx, n, record=False, table_fill=False, copy_formats=False)
         tables.restore(book, sheet, old_tables)
         _restore_settings(book, old_settings)
         ws = sheet.ws
