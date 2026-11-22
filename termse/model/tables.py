@@ -263,7 +263,7 @@ def _rewrite_everywhere(book, make_fn, needle: str):
         fs, fnm = make_fn(_cell_table(book, s, r, c))
         new = _rewrite_srefs(cell._value, fs, fnm)
         if new != cell._value:
-            book.set_raw(s, r, c, new)
+            book.set_raw(s, r, c, new, keep_cached=True)
     for hit in tables_of(book):
         touched = False
         fs, fnm = make_fn(hit.name.lower())
@@ -655,7 +655,7 @@ def convert_to_range(book, hit: TableHit):
 
             new = _rewrite_srefs(cell._value, fs, fnm)
             if new != cell._value:
-                book.set_raw(s, r, c, new)
+                book.set_raw(s, r, c, new, keep_cached=True)
         for store in [book.wb.defined_names] + [s.ws.defined_names for s in book.sheets]:
             for dn in store.values():
                 if dn.attr_text and low in dn.attr_text.lower():

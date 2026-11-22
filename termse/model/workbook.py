@@ -72,7 +72,9 @@ class Sheet:
         self.ws = ws
         self.formulas: dict[tuple, Formula] = {}
         self.values: dict[tuple, object] = {}
-        self.cached: dict[tuple, tuple] = {}  # (r,c) -> (storage text, cached value from file)
+        # (r,c) -> (formula text when loaded, value Excel saved for it). Kept while the formula is
+        # only rewritten (references shifted or renamed); dropped when the cell's content is replaced.
+        self.cached: dict[tuple, tuple] = {}
         self.stale: set[tuple] = set()  # cells showing a cached value we could not recompute
         self.spill = SpillIndex()
         self.max_row = 0
@@ -795,7 +797,7 @@ class Workbook:
     def _compute(self, sheet: Sheet, r: int, c: int, f: Formula):
         """-> (value, spill rows or None, or _KEEP to leave the spill as it is)"""
         cached = sheet.cached.get((r, c))
-        has_cache = cached is not None and cached[0] == f.text
+        has_cache = cached is not None
         if f.ast is None or f.unsupported:
             if has_cache:
                 sheet.stale.add((r, c))
@@ -901,7 +903,7 @@ class Workbook:
         cell = sheet.ws._cells.get((r, c))
         if cell is None or isinstance(cell, MergedCell):
             return None
-        return (cell._value, cell.data_type, copy(cell._style))
+        return (cell._value, cell.data_type, copy(cell._style), sheet.cached.get((r, c)))
 
     def _touch(self, sheet: Sheet, r: int, c: int):
         if self._tx is not None:
@@ -919,10 +921,14 @@ class Workbook:
             if cell is not None and not isinstance(cell, MergedCell):
                 del ws._cells[(r, c)]
             return
-        value, data_type, style = snap
+        value, data_type, style, cached = snap
         cell = ws._cells.get((r, c))
         if isinstance(cell, MergedCell):
             return
+        if cached is None:
+            sheet.cached.pop((r, c), None)
+        else:
+            sheet.cached[(r, c)] = cached
         if cell is None:
             cell = ws.cell(row=r, column=c)
             self.legacy.discard(id(cell))  # a new object may reuse a forgotten cell's id
@@ -1021,8 +1027,11 @@ class Workbook:
             cell = sheet.ws.cell(row=r, column=c)
         return cell
 
-    def set_raw(self, sheet: Sheet, r: int, c: int, value, data_type: str | None = None):
-        """Write a raw value (formulas as '=...' storage text). Must be inside a transaction."""
+    def set_raw(self, sheet: Sheet, r: int, c: int, value, data_type: str | None = None,
+                keep_cached: bool = False):
+        """Write a raw value (formulas as '=...' storage text). Must be inside a transaction.
+        keep_cached=True when only the formula's references are rewritten: it then keeps the
+        value Excel saved for it (shown when it uses functions we can't calculate)."""
         existing = sheet.ws._cells.get((r, c))
         if isinstance(existing, MergedCell):
             return
@@ -1034,6 +1043,8 @@ class Workbook:
             value = qualify(self, value, sheet, r, c)
         self._touch(sheet, r, c)
         self._unregister(sheet, r, c)
+        if not keep_cached:
+            sheet.cached.pop((r, c), None)
         cell = existing if existing is not None else sheet.ws.cell(row=r, column=c)
         if self.legacy:
             self.legacy.discard(id(cell))
@@ -1346,7 +1357,7 @@ class Workbook:
                 text = f.text
                 new_text = transform_refs(text, fn)
                 if new_text != text:
-                    self.set_raw(s, r, c, to_storage(new_text))
+                    self.set_raw(s, r, c, to_storage(new_text), keep_cached=True)
 
     def fill(self, sheet: Sheet, rect: Rect, direction: str):
         """Ctrl+D / Ctrl+R: copy the first row/column of rect across the rest."""
