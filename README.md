@@ -20,9 +20,10 @@ available. Run it from the source tree with `./txl` or `python3 -m termxl`.
   validation, conditional formatting, notes, hyperlinks, tab colors and sheet order are kept.
   Formula results are written into the file too, so other programs show values straight away,
   and Excel recalculates when it opens the file.
-- **Live formulas.** It has its own parser and recalculation engine with about 190 functions
-  (math, statistics, logical, lookup, text, date/time, information), Excel's type coercion and
-  error values, ranges across sheets, defined names, array arithmetic (`SUMPRODUCT((A:A>5)*B:B)`),
+- **Live formulas.** It has its own parser and recalculation engine with about 300 functions
+  (math, statistics, probability distributions and hypothesis tests, regression, logical, lookup,
+  text, date/time, information), Excel's type coercion and error values, ranges across sheets,
+  defined names, array arithmetic (`SUMPRODUCT((A:A>5)*B:B)`),
   and circular-reference detection. Results Excel saved in the file are shown as-is until
   something they depend on changes.
 - **Excel-style editing.** Type to replace a cell, F2 to edit it. Arrow keys (or the mouse)
@@ -63,9 +64,9 @@ Press **F1** for the key reference and **Ctrl+P** for the command palette.
   The status bar tells you when you're on such a cell.
 - Cutting and pasting a whole table moves its cells but not the table itself. Deleting a table
   column leaves formulas that used it showing `#REF!` without rewriting them.
-- Dynamic-array formulas (`FILTER`, `UNIQUE`, `SORT`, `SEQUENCE`…) work inside other functions
-  (`=SUM(FILTER(...))`), but results don't spill into neighbouring cells. A cell shows the
-  first value.
+- Dynamic-array formulas (`FILTER`, `UNIQUE`, `SORT`, `SEQUENCE`, `LINEST`, `FREQUENCY`…) work inside
+  other functions (`=SUM(FILTER(...))`, `=INDEX(LINEST(y,x),1)`), but results don't spill into
+  neighbouring cells. A cell shows the first value.
 - Legacy `.xls` and `.xlsb` aren't supported. Convert them first:
   `soffice --headless --convert-to xlsx file.xls`.
 - Ctrl+I only reaches the app in terminals with the kitty keyboard protocol; elsewhere use Alt+I.

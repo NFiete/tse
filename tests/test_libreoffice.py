@@ -61,6 +61,28 @@ FORMULAS = [
     "=MAXA(B2:B7)", '=AVERAGEA(B2:B7)', "=SUBTOTAL(9,B2:B7)", "=SUBTOTAL(1,C2:C7)",
     '=FIXED(1234.567,1)', '=DOLLAR(-1234.5)', '=CHAR(65)&CODE("a")', "=CLEAN(\"a\"&CHAR(7)&\"b\")",
     "=1E+300*1E+300", "=SQRT(-1)", '=VALUE("abc")', "=NA()", "=1/0",
+    # statistical distributions and tests
+    "=NORM.DIST(1.3,0.5,2,TRUE)", "=NORM.DIST(1.3,0.5,2,FALSE)", "=NORM.INV(0.975,10,3)", "=NORM.S.INV(0.05)",
+    "=NORMSDIST(-4)", "=LOGNORM.DIST(4,3.5,1.2,TRUE)", "=LOGINV(0.5,1,2)", "=EXPON.DIST(0.2,10,FALSE)",
+    "=WEIBULL(2,1.5,3,0)", "=GAMMA(-0.75)", "=GAMMALN.PRECISE(0.3)", "=GAMMADIST(3,0.5,2,TRUE)",
+    "=GAMMAINV(0.99,2.5,1)", "=BETA.DIST(0.3,2,3,TRUE)", "=BETAINV(0.2,4,5)", "=CHISQ.DIST(2,3,FALSE)",
+    "=CHIDIST(3.5,2)", "=CHISQ.INV(0.93,1)", "=CHIINV(0.5,4)", "=CHISQ.INV.RT(1E-12,3)", "=T.DIST(-1.2,7,TRUE)",
+    "=TDIST(1.96,60,1)", "=T.INV(0.01,15)", "=TINV(0.05,10)", "=T.INV(0.3,5.9)", "=F.DIST(2,3,30,FALSE)",
+    "=FDIST(2,3,30)", "=F.INV.RT(0.01,6,4)", "=FINV(0.5,10,2)", "=POISSON(250,240,1)", "=HYPGEOMDIST(2,10,5,30)",
+    "=NEGBINOMDIST(3,2,0.6)", "=CRITBINOM(100,0.3,0.5)", "=BINOM.INV(5000,0.01,0.9)",
+    "=BINOM.DIST(2000,5000,0.4,TRUE)", "=CONFIDENCE(0.1,1,10)", "=CONFIDENCE.T(0.05,1,50)",
+    "=T.TEST(B2:B7,C2:C7,2,1)", "=T.TEST(B2:B7,C2:C7,1,2)", "=TTEST(B2:B7,C2:C7,2,3)", "=F.TEST(B2:B7,C2:C7)",
+    "=Z.TEST(C2:C7,2)", "=ZTEST(B2:B7,4,3)", "=CHISQ.TEST(B2:B4,C2:C4)",
+    # descriptive statistics and regression
+    "=AVEDEV(C2:C7)", "=DEVSQ(B2:B7)", "=SKEW(C2:C7)", "=SKEW.P(B2:B7)", "=KURT(C2:C7)", "=HARMEAN(C2:C7)",
+    "=TRIMMEAN(B2:B7,0.4)", "=FISHER(0.3)", "=FISHERINV(-0.4)", "=PERMUTATIONA(4,3)", "=STANDARDIZE(5,3,2)",
+    "=STDEVA(A1:C7)", "=VARPA(A1:C7)", "=PERCENTRANK.INC(B2:B7,5)", "=PERCENTRANK(C2:C7,1)",
+    "=PERCENTRANK.EXC(B2:B7,3,4)", "=INDEX(MODE.MULT(1,2,3,4,3,2,1,2,3),2)",
+    "=INDEX(FREQUENCY(C2:C7,{1,3}),2)", "=PROB(B2:B4,{0.2;0.5;0.3},3,12)", "=COVAR(B2:B7,C2:C7)",
+    "=COVARIANCE.S(B2:B7,C2:C7)", "=RSQ(C2:C7,B2:B7)", "=STEYX(C2:C7,B2:B7)", "=FORECAST(10,C2:C7,B2:B7)",
+    "=INDEX(LINEST(C2:C7,B2:B7,TRUE,TRUE),2,1)", "=INDEX(LINEST(C2:C7,B2:B7,TRUE,TRUE),4,1)",
+    "=INDEX(LINEST(D2:D7,B2:C7,FALSE,TRUE),5,2)", "=INDEX(LOGEST(C2:C7,B2:B7,TRUE,TRUE),1,1)",
+    "=INDEX(TREND(C2:C7,B2:B7,{15;20}),2)", "=INDEX(GROWTH(C2:C7,B2:B7,{15;20}),1)",
 ]
 
 # Where LibreOffice and Excel disagree, we follow Excel (Microsoft 365).
@@ -68,6 +90,8 @@ EXCEL_DIFFERS = {
     "=SUM((B2:B7>2)*C2:C7)": 5.65,        # dynamic-array evaluation; LibreOffice: #VALUE!
     "=SQRT(-1)": "#NUM!",                  # LibreOffice: #VALUE!
     "=DOLLAR(-1234.5)": "($1,234.50)",     # en-US currency format; LibreOffice: -$1,234.50
+    "=PERCENTRANK(C2:C7,1)": 0.288,        # Excel truncates to 3 digits; LibreOffice rounds: 0.289
+    "=PERCENTRANK.EXC(B2:B7,3,4)": 0.4285,  # likewise; LibreOffice: 0.4286
 }
 
 
