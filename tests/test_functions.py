@@ -269,3 +269,12 @@ def test_math_constants(ev):
     assert ev("=PI()") == pytest.approx(math.pi)
     v = ev("=RAND()")
     assert 0 <= v < 1
+
+
+@pytest.mark.parametrize("name", ["ISFORMULA", "NUMBERVALUE", "UNICHAR", "UNICODE"])
+def test_excel_2013_functions_get_storage_prefix(name):
+    """Excel shows #NAME? for these unless the file spells them with _xlfn."""
+    from termse.formula.parser import to_display, to_storage
+
+    assert to_storage(f"={name}(A1)") == f"=_xlfn.{name}(A1)"
+    assert to_display(f"=_xlfn.{name}(A1)") == f"={name}(A1)"
