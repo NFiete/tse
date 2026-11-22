@@ -207,3 +207,13 @@ def test_hyperlink_and_areas(ev):
     assert ev('=HYPERLINK("https://example.com")') == "https://example.com"
     assert ev("=AREAS(B2:D4)") == 1
     assert ev("=AREAS(5)").code == "#VALUE!"
+
+
+def test_row_and_column_of_ranges_spill(ws):
+    assert grid(ws, "=ROW(1:10)") == [[r] for r in range(1, 11)]
+    assert grid(ws, "=ROW(B3:D5)") == [[3], [4], [5]]
+    assert grid(ws, "=COLUMN(B:D)") == [[2, 3, 4]]
+    ws["H1"] = "=SUM(ROW(A1:A10))"
+    assert ws["H1"] == 55
+    ws["H1"] = "=ROW(C7)+COLUMN(C7)"
+    assert ws["H1"] == 10

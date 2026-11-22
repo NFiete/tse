@@ -229,7 +229,9 @@ def ROW(ctx, ref=MISSING):
     if ref is MISSING:
         return ctx.row
     if isinstance(ref, RefValue):
-        return ref.r1
+        if ref.r1 == ref.r2:
+            return ref.r1
+        return Array([[r] for r in range(ref.r1, ref.r2 + 1)])
     raise XLError(VALUE)
 
 
@@ -238,7 +240,9 @@ def COLUMN(ctx, ref=MISSING):
     if ref is MISSING:
         return ctx.col
     if isinstance(ref, RefValue):
-        return ref.c1
+        if ref.c1 == ref.c2:
+            return ref.c1
+        return Array([list(range(ref.c1, ref.c2 + 1))])
     raise XLError(VALUE)
 
 
