@@ -26,7 +26,8 @@ available. Run it from the source tree with `./tse` or `python3 -m termse`.
   text, date/time, information), Excel's type coercion and error values, ranges across sheets,
   defined names, array arithmetic (`SUMPRODUCT((A:A>5)*B:B)`), dynamic arrays that spill into
   neighbouring cells (`=SORT(FILTER(A2:C99,C2:C99>0))`, `=A2:A10*2`, spill references like
-  `=SUM(E2#)`, `@` for implicit intersection), `LET` and `LAMBDA` (including LAMBDAs stored in
+  `=SUM(E2#)`, `@` for implicit intersection, trim references like `=XLOOKUP(x,A:.A,B:.B)`),
+  `LET` and `LAMBDA` (including LAMBDAs stored in
   defined names, and the helpers MAP, REDUCE, SCAN, BYROW, BYCOL and MAKEARRAY), and
   circular-reference detection. Results Excel saved in the file are shown as-is until
   something they depend on changes.

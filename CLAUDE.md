@@ -60,6 +60,10 @@ deliberate performance measure for large workbooks; keep it when touching those 
 - `parser.py`: tokenizer + recursive-descent parser → AST nodes (`Const`, `RefNode`, `NameNode`,
   `Func`, `Binary`, …). Also provides token-level reference rewriting (`transform_refs`,
   `rewrite_tokens`, `translate`) used for copy/paste, structural edits and name renames.
+  Trim references (`A:.A`, `A1.:.E10`) are usually one REF token with `RefInfo.trim` set (so
+  reference rewriting keeps the dots), or a `.:`/`:.`/`.:.` operator between other operands.
+  Both parse to `Func("_TRO_LEADING"|"_TRO_TRAILING"|"_TRO_ALL")`, which is also how files
+  store them (`_xlfn._TRO_TRAILING(A:A)`).
 - `evaluator.py`: evaluates ASTs with Excel coercion, error propagation and elementwise array
   lifting. Errors are raised as `XLError` and turned into `ExcelError` values; `Unsupported` means
   "keep the cached value".

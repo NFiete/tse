@@ -38,6 +38,16 @@ class RefInfo:
     ar2: bool = False
     ac2: bool = False
     sheet_raw: str = ""  # prefix exactly as written, including the '!'
+    trim: int = 0  # trim reference (TRIM_*): A1.:E10 = leading, A1:.E10 = trailing, A1.:.E10 = both
+
+
+# Trim-reference modes (bit 1 = trim leading blanks, bit 2 = trailing) and the functions files
+# store them as: A1:.E10 is _xlfn._TRO_TRAILING(A1:E10).
+TRIM_LEADING, TRIM_TRAILING, TRIM_ALL = 1, 2, 3
+TRIM_FUNCS = {TRIM_LEADING: "_TRO_LEADING", TRIM_TRAILING: "_TRO_TRAILING", TRIM_ALL: "_TRO_ALL"}
+TRIM_OPS = {".:": TRIM_LEADING, ":.": TRIM_TRAILING, ".:.": TRIM_ALL}
+_TRIM_MODE = {name: mode for mode, name in TRIM_FUNCS.items()}
+_RANGE_OPS = (":", ".:", ":.", ".:.")
 
 
 # Special item specifiers of structured references, by their lower-case spelling.
@@ -71,7 +81,8 @@ class Token:
 
 _ID_START = r"A-Za-z_\\¡-￿"
 _ID_REST = r"A-Za-z0-9_.\\?¡-￿"
-_NOTREF = r"(?![A-Za-z0-9_(.!\[])"
+_NOTREF = r"(?![A-Za-z0-9_(!\[]|\.(?!:))"  # a '.' may follow only as part of a trim operator
+_SEP = r"\.?:\.?"  # ':' or a trim-reference operator
 _PFX = r"'(?:[^']|'')+'|[A-Za-z0-9_.¡-￿]+"
 _MASTER = re.compile(
     r"(?P<ws>[ \t\r\n]+)"
@@ -80,16 +91,16 @@ _MASTER = re.compile(
     r"|(?P<err>#(?:NULL!|DIV/0!|VALUE!|REF!|NAME\?|NUM!|N/A|SPILL!|CALC!|GETTING_DATA))"
     r"|(?P<bracket>\[)"
     rf"|(?:(?P<pfx>{_PFX})!)?(?:"
-    rf"(?P<xr>\$?[A-Za-z]{{1,3}}\$?\d+:\$?[A-Za-z]{{1,3}}\$?\d+){_NOTREF}"
+    rf"(?P<xr>\$?[A-Za-z]{{1,3}}\$?\d+{_SEP}\$?[A-Za-z]{{1,3}}\$?\d+){_NOTREF}"
     rf"|(?P<cell>\$?[A-Za-z]{{1,3}}\$?\d+){_NOTREF}"
-    rf"|(?P<cr>\$?[A-Za-z]{{1,3}}:\$?[A-Za-z]{{1,3}}){_NOTREF}"
-    rf"|(?P<rr>\$?\d+:\$?\d+){_NOTREF})"
+    rf"|(?P<cr>\$?[A-Za-z]{{1,3}}{_SEP}\$?[A-Za-z]{{1,3}}){_NOTREF}"
+    rf"|(?P<rr>\$?\d+{_SEP}\$?\d+){_NOTREF})"
     rf"|(?P<pfx2>{_PFX})!(?:(?P<perr>#REF!)|(?P<pname>[{_ID_START}][{_ID_REST}]*))"
     r"|(?P<num>(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)"
     r"|(?P<bool>(?i:TRUE|FALSE))(?![A-Za-z0-9_.(])"
     rf"|(?P<func>[{_ID_START}][{_ID_REST}]*)\("
     rf"|(?P<name>[{_ID_START}][{_ID_REST}]*)(?P<sref>\[)?"
-    r"|(?P<op><>|<=|>=|[-+*/^&=<>%:])"
+    r"|(?P<op><>|<=|>=|\.:\.?|:\.|[-+*/^&=<>%:])"
     r"|(?P<punct>[(),;{}])"
 )
 _ERR_AT = re.compile(r"#(?:NULL!|DIV/0!|VALUE!|REF!|NAME\?|NUM!|N/A|SPILL!|CALC!|GETTING_DATA)")
@@ -112,6 +123,18 @@ def _make_ref(kind: str, body: str, sheet, sheet_raw: str) -> RefInfo | None:
             return None
         return RefInfo(sheet, "cell", r, c, r, c, bool(ar), bool(ac), bool(ar), bool(ac), sheet_raw)
     a, b = body.split(":")
+    trim = 0
+    if a.endswith("."):
+        a, trim = a[:-1], TRIM_LEADING
+    if b.startswith("."):
+        b, trim = b[1:], trim | TRIM_TRAILING
+    info = _make_range(kind, a, b, sheet, sheet_raw)
+    if info is not None:
+        info.trim = trim
+    return info
+
+
+def _make_range(kind: str, a: str, b: str, sheet, sheet_raw: str) -> RefInfo | None:
     if kind == "xr":
         ac1, c1, ar1, r1 = _CELLPART.fullmatch(a).groups()
         ac2, c2, ar2, r2 = _CELLPART.fullmatch(b).groups()
@@ -472,7 +495,7 @@ _INFIX_BP = {
     "+": 30, "-": 30,
     "*": 40, "/": 40,
     "^": 50,
-    ":": 80,
+    ":": 80, ".:": 80, ":.": 80, ".:.": 80,
 }
 _POSTFIX_BP = 60
 _PREFIX_BP = 70
@@ -635,7 +658,10 @@ class _Parser:
                 break
             self.i += 1
             right = self.expr(bp + 1)
-            left = Binary(t.text, left, right)
+            if t.text in TRIM_OPS:
+                left = Func(TRIM_FUNCS[TRIM_OPS[t.text]], [Binary(":", left, right)], t.text)
+            else:
+                left = Binary(t.text, left, right)
         return left
 
     def prefix(self) -> Node:
@@ -644,6 +670,8 @@ class _Parser:
         if k in (NUM, STR, BOOL, ERR):
             return Const(t.value)
         if k == REFT:
+            if t.ref.trim:
+                return Func(TRIM_FUNCS[t.ref.trim], [RefNode(t.ref)], TRIM_FUNCS[t.ref.trim])
             return RefNode(t.ref)
         if k == NAMET:
             name = t.value
@@ -750,12 +778,14 @@ def ref_text(info: RefInfo) -> str:
     p = info.sheet_raw
     if info.kind == "cell":
         return f"{p}{'$' if info.ac1 else ''}{col_letter(info.c1)}{'$' if info.ar1 else ''}{info.r1}"
+    sep = ":" if not info.trim else ("." if info.trim & TRIM_LEADING else "") + ":" + (
+        "." if info.trim & TRIM_TRAILING else "")
     if info.kind == "range":
-        return (f"{p}{'$' if info.ac1 else ''}{col_letter(info.c1)}{'$' if info.ar1 else ''}{info.r1}:"
+        return (f"{p}{'$' if info.ac1 else ''}{col_letter(info.c1)}{'$' if info.ar1 else ''}{info.r1}{sep}"
                 f"{'$' if info.ac2 else ''}{col_letter(info.c2)}{'$' if info.ar2 else ''}{info.r2}")
     if info.kind == "col":
-        return f"{p}{'$' if info.ac1 else ''}{col_letter(info.c1)}:{'$' if info.ac2 else ''}{col_letter(info.c2)}"
-    return f"{p}{'$' if info.ar1 else ''}{info.r1}:{'$' if info.ar2 else ''}{info.r2}"
+        return f"{p}{'$' if info.ac1 else ''}{col_letter(info.c1)}{sep}{'$' if info.ac2 else ''}{col_letter(info.c2)}"
+    return f"{p}{'$' if info.ar1 else ''}{info.r1}{sep}{'$' if info.ar2 else ''}{info.r2}"
 
 
 def local_tokens(toks: list[Token]) -> set[int]:
@@ -919,6 +949,7 @@ XLFN_FUNCS = {
     # dynamic-array and lookup functions
     "TAKE", "DROP", "VSTACK", "HSTACK", "TOCOL", "TOROW", "CHOOSEROWS", "CHOOSECOLS", "EXPAND", "WRAPROWS",
     "WRAPCOLS", "FORMULATEXT", "GROUPBY", "PIVOTBY", "TRIMRANGE", "PERCENTOF",
+    "_TRO_LEADING", "_TRO_TRAILING", "_TRO_ALL",
     # LAMBDA helpers
     "MAP", "REDUCE", "SCAN", "BYROW", "BYCOL", "MAKEARRAY", "ISOMITTED",
     # statistical functions added in Excel 2010-2016
@@ -953,9 +984,10 @@ def normalize(formula: str) -> str:
     return rewrite_tokens(formula, fn, skip_locals=True)
 
 
-def _operand_end(toks: list[Token], i: int) -> int:
+def _operand_end(toks: list[Token], i: int, chain: bool = True) -> int:
     """Index of the last token of the operand starting at toks[i]: a reference, name, function
-    call or bracketed expression, with any following ':' and '#' operators."""
+    call or bracketed expression, with any following '#' operator and (if chain) any following
+    range operators."""
     n = len(toks)
     j = i
     while j < n and toks[j].kind == OP and toks[j].text == "@":
@@ -970,9 +1002,39 @@ def _operand_end(toks: list[Token], i: int) -> int:
             j = n - 1 if close is None else close
     if j + 1 < n and toks[j + 1].kind == OP and toks[j + 1].text == "#":
         j += 1
-    if j + 2 < n and toks[j + 1].kind == OP and toks[j + 1].text == ":":
+    if chain and j + 2 < n and toks[j + 1].kind == OP and toks[j + 1].text in _RANGE_OPS:
         return _operand_end(toks, j + 2)
     return j
+
+
+def _operand_start(toks: list[Token], j: int) -> int:
+    """Index of the first token of the range-operator chain ending at toks[j]; the left operand
+    of a range operator following toks[j] (range operators are left-associative)."""
+    while True:
+        if toks[j].kind == OP and toks[j].text == "#" and j > 0:
+            j -= 1
+        if toks[j].kind in (RP, RBRACE):
+            while True:
+                depth = 0
+                for k in range(j, -1, -1):
+                    kind = toks[k].kind
+                    if kind in (RP, RBRACE):
+                        depth += 1
+                    elif kind in (FUNC, LP, LBRACE):
+                        depth -= 1
+                        if depth == 0:
+                            break
+                else:
+                    return 0
+                j = k
+                if toks[j].kind == LP and j > 0 and toks[j - 1].kind == RP:  # LAMBDA(x,x)(1)
+                    j -= 1
+                    continue
+                break
+        if j >= 2 and toks[j - 1].kind == OP and toks[j - 1].text in _RANGE_OPS:
+            j -= 2
+            continue
+        return j
 
 
 def _match_close(toks: list[Token], i: int) -> int | None:
@@ -1003,7 +1065,8 @@ def _rebuild(body: str, toks: list[Token], repl: dict) -> str:
 def to_storage(formula: str) -> str:
     """Add _xlfn. prefixes required by the xlsx format for newer functions, _xleta. to functions
     passed as arguments, spell [@Col] table references as [[#This Row],[Col]], A1# as
-    _xlfn.ANCHORARRAY(A1) and @x as _xlfn.SINGLE(x)."""
+    _xlfn.ANCHORARRAY(A1), @x as _xlfn.SINGLE(x) and trim references such as A:.A as
+    _xlfn._TRO_TRAILING(A:A)."""
     if not formula.startswith("="):
         return formula
     body = formula[1:]
@@ -1023,6 +1086,10 @@ def to_storage(formula: str) -> str:
                 new = "_xlpm." + t.text
         elif t.kind == SREFT:
             new = sref_text(t.value, storage=True) if "thisrow" in t.value.items else None
+        elif t.kind == REFT and t.ref.trim:
+            plain = RefInfo(**t.ref.__dict__)
+            plain.trim = 0
+            new = f"_xlfn.{TRIM_FUNCS[t.ref.trim]}({ref_text(plain)})"
         elif t.kind in (LP, LBRACE):
             stack.append(None)
         elif t.kind in (RP, RBRACE):
@@ -1044,6 +1111,12 @@ def to_storage(formula: str) -> str:
         if t.kind == OP and t.text == "#" and i > 0:
             repl[i - 1] = "_xlfn.ANCHORARRAY(" + repl.get(i - 1, toks[i - 1].text)
             repl[i] = ")"
+    for i, t in enumerate(toks):
+        if t.kind == OP and t.text in TRIM_OPS and 0 < i < len(toks) - 1:
+            a, b = _operand_start(toks, i - 1), _operand_end(toks, i + 1, chain=False)
+            repl[a] = f"_xlfn.{TRIM_FUNCS[TRIM_OPS[t.text]]}(" + repl.get(a, toks[a].text)
+            repl[i] = ":"
+            repl[b] = repl.get(b, toks[b].text) + ")"
     for i in range(len(toks) - 1, -1, -1):
         t = toks[i]
         if t.kind == OP and t.text == "@" and i + 1 < len(toks):
@@ -1064,7 +1137,7 @@ def _is_function_name(name: str) -> bool:
 
 def to_display(formula: str) -> str:
     """Strip _xlfn./_xlws. prefixes for display and editing, show [#This Row] as @,
-    _xlfn.ANCHORARRAY(A1) as A1# and _xlfn.SINGLE(x) as @x."""
+    _xlfn.ANCHORARRAY(A1) as A1#, _xlfn.SINGLE(x) as @x and _xlfn._TRO_TRAILING(A:A) as A:.A."""
     low = formula.lower()
     if "_xl" not in low and "#this row" not in low:
         return formula
@@ -1108,9 +1181,45 @@ def to_display(formula: str) -> str:
                 repl[j] = ""
             else:
                 repl[i] = "@("
+        elif canon in _TRIM_MODE:
+            _display_trim(toks, i, _TRIM_MODE[canon], repl)
     if not repl:
         return formula
     return "=" + _rebuild(body, toks, repl)
+
+
+def _display_trim(toks: list[Token], i: int, mode: int, repl: dict) -> None:
+    """Show _xlfn._TRO_*(x:y), the function call at toks[i], as the trim reference x:.y when
+    that reads back the same way; otherwise it stays a call."""
+    n = len(toks)
+    j = _match_close(toks, i)
+    if j is None or j == i + 1:
+        return
+    arg = toks[i + 1]
+    if j == i + 2 and arg.kind == REFT and arg.ref.kind != "cell" and not arg.ref.trim:
+        trimmed = RefInfo(**arg.ref.__dict__)
+        trimmed.trim = mode
+        repl[i], repl[i + 1], repl[j] = "", ref_text(trimmed), ""
+        return
+    if _operand_end(toks, i + 1) != j - 1:
+        return
+    if i > 0 and toks[i - 1].kind == OP and toks[i - 1].text in _RANGE_OPS:
+        return  # x:_TRO_ALL(y:z) would read back as (x:y).:.z
+    if j + 1 < n and toks[j + 1].kind == OP and toks[j + 1].text == "#":
+        return
+    # The operator to replace is the last top-level ':' of the argument.
+    depth, last = 0, None
+    for k in range(i + 1, j):
+        kind = toks[k].kind
+        if kind in (FUNC, LP, LBRACE):
+            depth += 1
+        elif kind in (RP, RBRACE):
+            depth -= 1
+        elif depth == 0 and kind == OP and toks[k].text in _RANGE_OPS:
+            last = k
+    if last is None or toks[last].text != ":":
+        return
+    repl[i], repl[last], repl[j] = "", {v: k for k, v in TRIM_OPS.items()}[mode], ""
 
 
 def is_error_literal(text: str) -> ExcelError | None:

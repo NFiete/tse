@@ -150,6 +150,85 @@ def test_trimrange(ws):
     assert grid(ws, "=TRIMRANGE(A1:F10,4)") == "#VALUE!"
 
 
+def test_trim_references(ws):
+    ws["B3"] = "1"
+    ws["D5"] = "2"
+    assert grid(ws, "=A1:.F10") == grid(ws, "=TRIMRANGE(A1:F10,2,2)")
+    assert grid(ws, "=A1.:F10") == grid(ws, "=TRIMRANGE(A1:F10,1,1)")
+    assert grid(ws, "=A1.:.F10") == [[1, None, None], [None, None, None], [None, None, 2]]
+    ws["Z1"] = ""
+    ws["H1"] = "=ROWS(A1:.F10)&\",\"&COLUMNS(A1:.F10)"
+    assert ws["H1"] == "5,4"
+    ws["H1"] = "=ROWS(A1.:F10)&\",\"&COLUMNS(A1.:F10)"
+    assert ws["H1"] == "8,5"
+    ws["H1"] = "=SUM(B:.B)+COUNTA(5:.5)"
+    assert ws["H1"] == 2
+    ws["H2"] = "=ROWS(B:.B)"
+    assert ws["H2"] == 3
+    ws["B9"] = "7"  # the trimmed range grows with the data
+    assert ws["H2"] == 9
+    assert ws["H1"] == 9
+    # the operator form, between things that aren't plain references
+    ws["H1"] = "=ROWS(B1:.INDEX(B:B,20))"
+    assert ws["H1"] == 9
+    ws["H1"] = "=sum(b:.b)"
+    assert ws.text("H1") == "=SUM(B:.B)"
+
+
+def test_trim_reference_storage():
+    pairs = [
+        ("=SUM(A:.A)", "=SUM(_xlfn._TRO_TRAILING(A:A))"),
+        ("=A1.:E10", "=_xlfn._TRO_LEADING(A1:E10)"),
+        ("=$A$1.:.$E10", "=_xlfn._TRO_ALL($A$1:$E10)"),
+        ("=Sheet2!1:.3", "=_xlfn._TRO_TRAILING(Sheet2!1:3)"),
+        ("=XLOOKUP(1,A:.A,B:.B)", "=_xlfn.XLOOKUP(1,_xlfn._TRO_TRAILING(A:A),_xlfn._TRO_TRAILING(B:B))"),
+        ("=@A1.:B2", "=_xlfn.SINGLE(_xlfn._TRO_LEADING(A1:B2))"),
+        ("=LEN(A1:.INDEX(B:B,5))", "=LEN(_xlfn._TRO_TRAILING(A1:INDEX(B:B,5)))"),
+        ("=A1.:B2:.C3", "=_xlfn._TRO_TRAILING(_xlfn._TRO_LEADING(A1:B2):C3)"),
+        ("=A1:.B2:C3", "=_xlfn._TRO_TRAILING(A1:B2):C3"),
+    ]
+    for display, stored in pairs:
+        assert to_storage(display) == stored
+        assert to_display(stored) == display
+    # calls that can't be written as an operator stay calls
+    assert to_display("=_xlfn._TRO_ALL(A1)") == "=_TRO_ALL(A1)"
+    assert to_display("=_xlfn._TRO_ALL(INDEX(A:A,1))") == "=_TRO_ALL(INDEX(A:A,1))"
+    assert to_storage("=_TRO_ALL(A1)") == "=_xlfn._TRO_ALL(A1)"
+
+
+def test_trim_references_follow_edits(ws):
+    from termse.formula.parser import translate
+    from termse.model import structure
+
+    assert translate("=SUM(A1:.B5)+SUM(C:.C)", 2, 1) == "=SUM(B3:.C7)+SUM(D:.D)"
+    ws["A1"] = "1"
+    ws["A2"] = "2"
+    ws["C1"] = "=SUM(A1.:.A9)"
+    structure.insert(ws.book, ws.sheet, "row", 1, 1)
+    assert ws.text("C2") == "=SUM(A2.:.A10)"
+    assert ws["C2"] == 3
+
+
+def test_trim_reference_round_trip(ws, tmp_path):
+    ws["A1"] = "1"
+    ws["A2"] = "2"
+    ws["B1"] = "=SUM(A:.A)"
+    ws["C1"] = "=A1.:.A5*10"
+    p = tmp_path / "t.xlsx"
+    xlsx.save(ws.book, str(p))
+    import openpyxl
+
+    saved = openpyxl.load_workbook(p).active
+    assert saved["B1"].value == "=SUM(_xlfn._TRO_TRAILING(A:A))"
+    assert saved["C1"].value.text == "=_xlfn._TRO_ALL(A1:A5)*10"
+    book = xlsx.load(str(p))
+    s = book.sheets[0]
+    assert s.formulas[(1, 2)].text == "=SUM(A:.A)"
+    assert book.get_value(s, 1, 2) == 3
+    assert book.get_value(s, 2, 3) == 20
+    assert not s.stale
+
+
 def test_shapes_keep_full_reference_size(ws):
     ws["A1"] = "1"
     ws["A2"] = "2"

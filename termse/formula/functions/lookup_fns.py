@@ -727,6 +727,24 @@ def TRIMRANGE(ctx, rng, trim_rows=MISSING, trim_cols=MISSING):
     tc = 3 if trim_cols is MISSING else to_int(scalar_arg(ctx, trim_cols))
     if tr not in (0, 1, 2, 3) or tc not in (0, 1, 2, 3):
         raise XLError(VALUE)
+    return _trimrange(ctx, rng, tr, tc)
+
+
+def _trim_ref(mode: int):
+    """The trim-reference operators: A1.:E10 (leading), A1:.E10 (trailing) and A1.:.E10 (both),
+    stored in files as _xlfn._TRO_LEADING(A1:E10) and so on."""
+
+    def impl(ctx, rng):
+        return _trimrange(ctx, rng, mode, mode)
+
+    return impl
+
+
+for _name, _mode in (("_TRO_LEADING", 1), ("_TRO_TRAILING", 2), ("_TRO_ALL", 3)):
+    fn(_name, kind="raw", min_args=1, max_args=1)(_trim_ref(_mode))
+
+
+def _trimrange(ctx, rng, tr: int, tc: int):
     if isinstance(rng, ExcelError):
         raise XLError(rng)
     if isinstance(rng, RefValue):
